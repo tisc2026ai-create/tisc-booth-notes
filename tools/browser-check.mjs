@@ -20,7 +20,7 @@ const server = createServer(async (req, res) => {
   catch { res.writeHead(404).end(); }
 });
 await new Promise(done => server.listen(0, '127.0.0.1', done));
-const url = `http://127.0.0.1:${server.address().port}/`;
+const url = process.argv[2] || `http://127.0.0.1:${server.address().port}/`;
 const chrome = spawn(process.env.CHROME_BIN || 'google-chrome', [
   '--headless=new', '--no-sandbox', '--disable-gpu', '--no-first-run',
   '--remote-debugging-port=0', `--user-data-dir=${scratch}`, 'about:blank',
