@@ -12,11 +12,17 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const scratch = await mkdtemp(join(tmpdir(), 'tisc-booth-check-'));
 const wait = ms => new Promise(done => setTimeout(done, ms));
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' };
+let servePreviousWorker = !process.argv[2];
+const currentCache = (await readFile(join(root, 'sw.js'), 'utf8')).match(/const CACHE = '([^']+)'/)[1];
 const server = createServer(async (req, res) => {
   const path = decodeURIComponent(new URL(req.url, 'http://localhost').pathname);
   const file = resolve(root, `.${path === '/' ? '/index.html' : path}`);
   if (!file.startsWith(`${root}/`)) { res.writeHead(403).end(); return; }
-  try { res.setHeader('Content-Type', types[extname(file)] || 'application/octet-stream'); res.end(await readFile(file)); }
+  try {
+    let body = await readFile(file);
+    if (servePreviousWorker && file === join(root, 'sw.js')) body = body.toString().replace(/const CACHE = '[^']+';/, "const CACHE = 'tisc-field-notes-v2';");
+    res.setHeader('Content-Type', types[extname(file)] || 'application/octet-stream'); res.end(body);
+  }
   catch { res.writeHead(404).end(); }
 });
 await new Promise(done => server.listen(0, '127.0.0.1', done));
@@ -124,12 +130,18 @@ try {
   const pngPath=join(scratch,'test-card.png');
   await writeFile(pngPath,Buffer.from(fixture.png,'base64'));
   const dom=await send('DOM.getDocument');
-  const fileInput=await send('DOM.querySelector',{nodeId:dom.root.nodeId,selector:'#card-file'});
+  assert.equal(await evaluate('document.querySelector("#card-file").getAttribute("capture")'),'environment');
+  assert.equal(await evaluate('document.querySelector("#gallery-file").hasAttribute("capture")'),false);
+  const fileInput=await send('DOM.querySelector',{nodeId:dom.root.nodeId,selector:'#gallery-file'});
   await send('DOM.setFileInputFiles',{nodeId:fileInput.nodeId,files:[pngPath]});
   await eventually('(async()=>{const db=await import("./storage.js");return (await db.getRecords()).some(r=>r.company==="실제 버튼 상담" && r.cards.length===1);})()');
   await eventually('!document.querySelector("#new-record").disabled');
-  await evaluate('document.querySelector("#new-record").click()');
+  await evaluate(`(() => {
+    const memo=document.querySelector('#memo');memo.value+=' · 다른 상담 추가 직전 수정';memo.dispatchEvent(new Event('input',{bubbles:true}));
+    document.querySelector('#add-consultation').click();
+  })()`);
   await eventually('document.querySelector("#company").value === "" && !document.querySelector("#company").disabled');
+  assert.ok(await evaluate('(async()=>{const db=await import("./storage.js");return (await db.getRecords()).some(r=>r.company==="실제 버튼 상담" && r.memo.includes("추가 직전 수정") && r.cards.length===1);})()'),'Creating another consultation must save the pending memo and retain its photo');
   await evaluate(`(() => {
     for(const [id,value] of [['company','갑작스러운 문의 회사'],['memo','명함 전달 후 추후 연락 요청']]) {
       const input=document.getElementById(id);input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));
@@ -138,15 +150,34 @@ try {
   await eventually('(async()=>{const db=await import("./storage.js");const records=await db.getRecords();return records.filter(r=>r.endAt===null).length===2 && records.some(r=>r.company==="갑작스러운 문의 회사");})()');
   assert.ok(await evaluate('!document.querySelector("#overlap-warning").hidden'),'Overlapping consultations must be visible');
   assert.ok(await evaluate('document.querySelector("#active-count").textContent.includes("2")'),'Both unfinished consultations must stay visible');
+  await evaluate(`(() => {
+    const memo=document.querySelector('#memo');memo.value+=' · 전환 직전 수정';memo.dispatchEvent(new Event('input',{bubbles:true}));
+    document.querySelector('.other-session').click();
+  })()`);
+  await eventually('document.querySelector("#company").value === "실제 버튼 상담" && !document.querySelector("#company").disabled');
+  assert.ok(await evaluate('(async()=>{const db=await import("./storage.js");return (await db.getRecords()).some(r=>r.company==="갑작스러운 문의 회사" && r.memo.includes("전환 직전 수정"));})()'),'Switching consultations must flush pending input');
+  await evaluate(`(() => {
+    window.originalIdbTransaction=IDBDatabase.prototype.transaction;
+    IDBDatabase.prototype.transaction=function(...args){if(args[1]==='readwrite')throw new DOMException('검증용 저장 실패','QuotaExceededError');return window.originalIdbTransaction.apply(this,args);};
+    const memo=document.querySelector('#memo');memo.value+=' · 저장 실패 중 입력';memo.dispatchEvent(new Event('input',{bubbles:true}));
+    document.querySelector('.other-session').click();
+  })()`);
+  await eventually('document.querySelector("#save-status").textContent.includes("저장 실패") && !document.querySelector("#add-consultation").disabled');
+  assert.equal(await evaluate('document.querySelector("#company").value'),'실제 버튼 상담','A failed save must not switch the selected consultation');
+  assert.ok(await evaluate('document.querySelector("#memo").value.includes("저장 실패 중 입력")'),'Unsaved input must remain visible');
+  await evaluate('document.querySelector("#add-consultation").click()');
+  await eventually('!document.querySelector("#add-consultation").disabled');
+  assert.equal(await evaluate('(async()=>{const db=await import("./storage.js");return (await db.getRecords()).length;})()'),3,'A failed save must not create another consultation');
+  await evaluate('IDBDatabase.prototype.transaction=window.originalIdbTransaction;delete window.originalIdbTransaction;document.querySelector("#retry-save").click();');
+  await eventually('document.querySelector("#save-status").textContent.includes("기기에 저장됨")');
+  await evaluate('document.querySelector(".other-session").click()');
+  await eventually('document.querySelector("#company").value === "갑작스러운 문의 회사" && !document.querySelector("#end-record").disabled');
   await eventually('!document.querySelector("#end-record").disabled');
   await evaluate('document.querySelector("#end-record").click()');
   await eventually('(async()=>{const db=await import("./storage.js");const records=await db.getRecords();return records.some(r=>r.company==="갑작스러운 문의 회사" && r.endAt!==null) && records.some(r=>r.company==="실제 버튼 상담" && r.endAt===null);})()');
   await eventually('!document.querySelector("#next-record").disabled');
   await evaluate('document.querySelector("#next-record").click()');
   await eventually('document.querySelector("#company").value === "실제 버튼 상담" && !document.querySelector("#end-record").hidden');
-  await eventually('!document.querySelector("#end-record").disabled');
-  await evaluate('document.querySelector("#end-record").click()');
-  await eventually('(async()=>{const db=await import("./storage.js");return (await db.getRecords()).some(r=>r.company==="실제 버튼 상담" && r.endAt!==null);})()');
   assert.equal(await evaluate('document.querySelectorAll("img[onerror]").length'),0);
   const downloads=join(scratch,'downloads');await mkdir(downloads);
   await send('Browser.setDownloadBehavior',{behavior:'allow',downloadPath:downloads});
@@ -160,6 +191,8 @@ try {
   assert.ok(zipPath,'UI did not download a ZIP');
   const exported=await readBundle(new Blob([await readFile(zipPath)]));
   assert.equal(exported.records.length,3);assert.equal(exported.cards.length,2);
+  assert.equal(exported.records.find(r=>r.company==='실제 버튼 상담').endAt,null,'An unfinished consultation must be included in the ZIP');
+  assert.equal(await evaluate('(async()=>{const db=await import("./storage.js");return (await db.getCards()).length;})()'),2,'Export must retain the photos in device storage');
   const importInput=await send('DOM.querySelector',{nodeId:dom.root.nodeId,selector:'#import-file'});
   await eventually('!document.querySelector("#import-file").disabled');
   await send('DOM.setFileInputFiles',{nodeId:importInput.nodeId,files:[zipPath]});
@@ -177,6 +210,21 @@ try {
     await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: name === 'mobile' });
     await wait(200);
     assert.ok(await evaluate('document.documentElement.scrollWidth <= innerWidth + 1'), `${name} page overflows horizontally`);
+    if(name==='mobile') {
+      for(const [view,selector] of [['records','.records-panel'],['editor','.editor-panel'],['transfer','.transfer-panel']]) {
+        await evaluate('document.querySelector("#show-'+view+'").click()');
+        await eventually('document.body.dataset.view === "'+view+'" && !document.querySelector("#show-'+view+'").disabled');
+        assert.ok(await evaluate('document.querySelector("'+selector+'").getBoundingClientRect().height > 0'),'The selected mobile view must be visible');
+        for(const other of ['.records-panel','.editor-panel','.transfer-panel'].filter(s=>s!==selector)) assert.equal(await evaluate('document.querySelector("'+other+'").getBoundingClientRect().height'),0,'Other mobile views must be hidden');
+        assert.ok(await evaluate('document.documentElement.scrollWidth <= innerWidth + 1'),view+' mobile view overflows horizontally');
+        assert.ok(await evaluate('Array.from(document.querySelectorAll(".field-nav button,.button,.text-button")).every(b=>getComputedStyle(b).borderTopWidth==="0px" && getComputedStyle(b).textDecorationLine==="none")'),'Buttons and navigation must have no separator borders or underlines');
+        await evaluate('window.scrollTo({top:0,behavior:"instant"})');
+        const shot=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});
+        await writeFile(join(artifactDir,'mobile-'+view+'.png'),Buffer.from(shot.data,'base64'));
+      }
+      await evaluate('document.querySelector("#show-editor").click()');
+      await eventually('document.body.dataset.view === "editor" && !document.querySelector("#show-editor").disabled');
+    }
     const shot = await send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
     await writeFile(join(artifactDir, `${name}.png`), Buffer.from(shot.data, 'base64'));
   }
@@ -184,13 +232,37 @@ try {
     await evaluate('navigator.serviceWorker.ready.then(()=>true)');
     await send('Page.reload');
     await eventually('!!navigator.serviceWorker.controller');
+    if (!process.argv[2]) {
+      assert.ok(await evaluate('caches.has("tisc-field-notes-v2")'),'The previous worker must be active before the update');
+      const snapshot = `(async()=>{
+        const db=await import('./storage.js');
+        const records=(await db.getRecords()).sort((a,b)=>a.id.localeCompare(b.id));
+        const cards=await Promise.all((await db.getCards()).sort((a,b)=>a.id.localeCompare(b.id)).map(async card=>({
+          id:card.id,recordId:card.recordId,type:card.type,size:card.size,
+          sha256:Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await card.blob.arrayBuffer())),b=>b.toString(16).padStart(2,'0')).join('')
+        })));
+        return {records,cards};
+      })()`;
+      const beforeUpdate = await evaluate(snapshot);
+      servePreviousWorker = false;
+      await evaluate('navigator.serviceWorker.getRegistration().then(registration=>registration.update()).then(()=>true)');
+      await eventually('navigator.serviceWorker.getRegistration().then(registration=>!!registration.waiting)');
+      await send('Page.navigate',{url:'about:blank'});
+      await eventually('location.href === "about:blank"');
+      await wait(200);
+      await send('Page.navigate',{url});
+      await eventually('document.readyState === "complete" && !!navigator.serviceWorker.controller && document.body.innerText.includes("A 도로운영사 · 테스트")');
+      await eventually('caches.has('+JSON.stringify(currentCache)+')');
+      assert.deepEqual(await evaluate(snapshot),beforeUpdate,'A worker update must preserve every consultation and photo byte');
+      assert.equal(await evaluate('caches.has("tisc-field-notes-v2")'),false,'Only the old screen cache should be removed');
+    }
     await send('Network.enable');
     await send('Network.emulateNetworkConditions', { offline:true,latency:0,downloadThroughput:0,uploadThroughput:0 });
     await send('Page.reload');
     await eventually('document.body.innerText.includes("A 도로운영사 · 테스트")');
   }
   assert.deepEqual(exceptions, [], `Browser exceptions: ${exceptions.join(', ')}`);
-  console.log('PASS: consultation and interruption UI, overlap warning, photo/export/import, real IndexedDB, ZIP roundtrip, duplicate/conflict/stale-tab protection, persistence, desktop/mobile layout, offline reload');
+  console.log('PASS: consultation and interruption UI, pending-save flush, failed-save switch/create prevention, camera/gallery selection, unfinished-consultation ZIP, retained photos, duplicate/conflict/stale-tab protection, persistence, monochrome borderless mobile views, desktop/mobile layout, service-worker update preserves records/photos, offline reload');
   console.log(`Screenshots: ${artifactDir}`);
 } finally {
   socket?.close();

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#A91836">
+  <meta name="theme-color" content="#ffffff">
   <meta name="description" content="TiSC ITS 2026 현장 상담 시간, 메모와 명함을 기기에 기록하고 파일로 전달합니다.">
   <title>TiSC · 현장 상담 기록</title>
   <link rel="icon" href="./icons/icon.svg" type="image/svg+xml">
@@ -12,26 +12,26 @@
 </head>
 <body>
   <header class="site-header">
-    <div class="brand"><span class="wordmark">TiSC<span class="brand-dot">.</span></span><span class="brand-caption">ITS WORLD CONGRESS<br><strong>GANGNEUNG 2026</strong></span></div>
+    <div class="brand"><span class="wordmark">TiSC<span class="brand-dot">.</span></span><span class="brand-caption">현장 상담 기록</span></div>
     <div class="header-right"><span class="local-badge"><span class="status-dot"></span>이 기기에 저장</span><span id="clock" class="clock">한국 시각 확인 중</span></div>
   </header>
   <main>
-    <div class="page-heading"><div><p class="eyebrow">FIELD NOTES / 현장 기록</p><h1>현장 상담 기록</h1><p class="heading-copy">상담 시간, 메모, 명함을 기록합니다.</p></div><div class="event-label"><span>2026 강릉 ITS 세계총회</span><strong>10.19 — 10.23</strong></div></div>
-    <div class="storage-note"><span class="note-symbol" aria-hidden="true">↳</span><p><strong>기록은 이 기기의 브라우저에만 저장됩니다.</strong> 쉬는 시간과 마감 때 ZIP으로 내보내 별도 보관하세요. 녹음은 별도 녹음기로 진행합니다.</p><span id="offline-status" class="offline-status">오프라인 준비 확인 중</span></div>
+    <div class="page-heading"><div><h1>현장 상담 기록</h1><p class="heading-copy">상담 시각과 메모, 명함을 이 기기에 보관합니다.</p></div><div class="event-label"><span>2026 강릉 ITS 세계총회</span><strong>10.19 — 10.23</strong></div></div>
+    <div class="storage-note"><p><strong>기기마다 기록이 따로 저장됩니다.</strong> 쉬는 시간과 마감 때 각 기기에서 ZIP을 내려받아 보관하세요. 녹음은 별도로 진행합니다.</p><span id="offline-status" class="offline-status">오프라인 준비 확인 중</span></div>
     <div id="message" class="message" role="status" aria-live="polite" hidden></div>
     <div id="storage-error" class="error-box" role="alert" hidden></div>
+    <nav id="field-nav" class="field-nav" aria-label="현장 화면"><button id="show-records" type="button" aria-current="page">상담 목록</button><button id="show-editor" type="button">상담 입력</button><button id="show-transfer" type="button">내보내기</button></nav>
     <div class="workspace">
       <section class="records-panel" aria-labelledby="records-heading">
-        <div class="panel-heading"><div><p class="eyebrow">CONSULTATIONS</p><h2 id="records-heading">상담 기록 <span id="record-count" class="count">0</span></h2></div><button id="new-record" class="text-button" type="button" disabled>+ 새 상담</button></div>
+        <div class="panel-heading"><h2 id="records-heading">상담 목록 <span id="record-count" class="count">0</span></h2><button id="new-record" class="text-button" type="button" disabled>+ 새 상담</button></div>
         <div class="list-tools"><label class="search-wrap"><span class="sr-only">회사명 또는 메모 검색</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg><input id="search" type="search" placeholder="회사명 또는 메모 검색" autocomplete="off"></label><label class="date-wrap"><span class="sr-only">기록 날짜 (한국 시각)</span><input id="filter-date" type="date" aria-label="기록 날짜 (한국 시각)"></label></div>
         <div class="list-caption"><span>한국 시각 · 시작일 기준 <span id="active-count" class="active-count">진행 중 0건</span></span><button id="all-dates" class="text-button subtle" type="button">모든 날짜</button></div>
         <div id="record-list" class="record-list" aria-label="상담 목록"></div>
-        <div class="transfer-panel"><div class="transfer-heading"><h3>기록을 파일로 전달</h3><span class="file-tag">ZIP</span></div><p>상담 내용과 연결된 명함 사진을 함께 담습니다.</p><button id="export-date" class="button button-outline wide" type="button" disabled><span aria-hidden="true">↓</span> 선택 날짜 내보내기</button><div class="secondary-actions"><button id="export-all" class="text-button" type="button" disabled>전체 기록 백업</button><label id="import-label" class="text-button import-label" for="import-file" role="button" tabindex="0">기록 ZIP 가져오기<input id="import-file" type="file" accept=".zip,application/zip" hidden disabled></label></div><p class="transfer-footnote">다운로드된 파일을 확인한 뒤 분석 PC로 옮겨주세요.</p></div>
       </section>
       <section class="editor-panel" aria-labelledby="editor-heading">
-        <div class="editor-top"><div><p class="eyebrow">CONSULTATION NOTE</p><h2 id="editor-heading">새로운 상담</h2></div><span id="save-status" class="save-status">준비 중</span></div>
+        <div class="editor-top"><h2 id="editor-heading">새 상담</h2><span id="save-status" class="save-status">준비 중</span></div>
         <div class="record-context"><label>기록 조<input id="team" type="text" maxlength="40" value="1조" autocomplete="off" aria-label="기록 조"></label><label>상담 구분<select id="visit-type"><option value="booth">우리 부스 상담</option><option value="visit">다른 부스 방문</option></select></label></div>
-        <div id="start-panel" class="start-panel"><div class="start-icon" aria-hidden="true"><svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="12"/><path d="M16 8v8l5 3"/></svg></div><h3>대화가 시작되면 눌러주세요.</h3><p>현재 날짜와 시각을 초 단위로 기록합니다.<br>기기 시계를 녹음기와 먼저 맞춰주세요.</p><button id="start-record" class="button button-primary wide" type="button" disabled><span aria-hidden="true">＋</span> 상담 시작</button></div>
+        <div id="start-panel" class="start-panel"><h3>대화가 시작될 때 시각을 기록하세요.</h3><p>전체 녹음은 상담 시작·종료 시각으로 구간을 연결합니다.<br>개별 녹음은 나중에 분석 PC에서 해당 상담에 연결합니다.</p><p>이 버튼은 상담 시각만 기록합니다. 녹음은 별도로 진행하고, 기기 시계를 녹음기와 먼저 맞춰주세요.</p><button id="start-record" class="button button-primary wide" type="button" disabled>상담 시작 · 시간 기록</button></div>
         <form id="record-form" hidden>
           <div id="session-banner" class="session-banner"><span><span class="status-dot"></span><strong id="session-state">상담 진행 중</strong></span><strong id="duration">00:00</strong></div>
           <div id="overlap-warning" class="overlap-warning" role="status" hidden></div>
@@ -39,14 +39,16 @@
           <div id="time-editor" class="time-editor" hidden><p>입력 시각은 한국 시각(UTC+09:00)입니다.</p><label>상담 시작<input id="manual-start" type="datetime-local" step="1" required></label><label>상담 종료<input id="manual-end" type="datetime-local" step="1"></label><p class="field-help">종료 시각을 비우면 진행 중인 상담으로 변경됩니다.</p><button id="save-times" class="button button-small button-outline" type="button">시각 적용</button></div>
           <label class="field-label" for="company">회사명 <span class="optional">나중에 입력해도 됩니다</span></label><input id="company" class="company-input" type="text" maxlength="200" placeholder="어느 회사와 이야기하셨나요?" autocomplete="organization">
           <label class="field-label" for="memo">짧은 메모</label><textarea id="memo" rows="5" maxlength="5000" placeholder="관심 제품, 질문, 요청 사항 등을 편하게 남겨주세요."></textarea><div class="memo-help"><span>입력한 내용은 자동으로 저장됩니다.</span><span id="memo-count">0 / 5,000</span></div>
-          <div class="cards-heading"><label class="field-label" for="card-file">명함 사진 <span class="optional">선택</span></label><span id="card-count" class="small-muted">0장</span></div>
-          <div id="cards" class="cards-grid"></div><label id="card-upload" class="card-upload" for="card-file" role="button" tabindex="0"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5 9.5 3h5L16 5h4a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z"/><circle cx="12" cy="12" r="4"/></svg><span>명함 촬영 · 사진 첨부</span><small>JPG · PNG · WebP / 여러 장 가능</small><input id="card-file" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" multiple hidden></label><p class="field-help">사진은 긴 변 1,600px 이내로 조정됩니다. 작은 글씨가 읽히는지 확대해 확인하세요.</p>
+          <div class="cards-heading"><span class="field-label">명함·명찰 사진 <span class="optional">선택</span></span><span id="card-count" class="small-muted">0장</span></div>
+          <div id="cards" class="cards-grid"></div><div class="photo-actions"><label id="card-upload" class="card-upload" for="card-file" role="button" tabindex="0"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5 9.5 3h5L16 5h4a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Z"/><circle cx="12" cy="12" r="4"/></svg><span>사진 촬영</span><input id="card-file" type="file" accept="image/jpeg,image/png,image/webp" capture="environment" multiple hidden></label><label id="gallery-upload" class="card-upload" for="gallery-file" role="button" tabindex="0"><span aria-hidden="true">＋</span><span>사진첩에서 선택</span><input id="gallery-file" type="file" accept="image/jpeg,image/png,image/webp" multiple hidden></label></div><p class="field-help">JPG · PNG · WebP / 여러 장 가능. 사진은 긴 변 1,600px 이내로 보관합니다. 첨부 사진을 눌러 글씨를 확인하세요.</p>
+          <div id="active-sessions" class="active-sessions" aria-label="다른 진행 중 상담"></div><button id="add-consultation" class="button button-outline wide" type="button">+ 다른 상담 추가</button>
           <div class="editor-actions"><button id="retry-save" class="button button-outline" type="button" hidden>저장 다시 시도</button><button id="end-record" class="button button-primary wide" type="button">상담 종료 · 시간 저장</button><button id="next-record" class="button button-primary wide" type="button" hidden>다음 상담 준비</button></div>
           <p class="editor-footnote">시간 기록용 · 음성 녹음과 AI 분석은 별도 진행</p>
         </form>
       </section>
+      <section class="transfer-panel" aria-labelledby="transfer-heading"><h2 id="transfer-heading">기록 내보내기</h2><p id="export-summary">상담 내용과 명함·명찰 사진을 함께 담습니다.</p><p>검색과 관계없이 선택한 날짜의 모든 기록을 포함합니다. 진행 중인 상담도 종료 시각 없이 포함되며, 분석 PC에서 시각 확인 후 분석할 수 있습니다.</p><button id="export-date" class="button button-primary wide" type="button" disabled>선택 날짜 ZIP 다운로드</button><div class="secondary-actions"><button id="export-all" class="text-button" type="button" disabled>모든 날짜 ZIP 백업</button><label id="import-label" class="text-button import-label" for="import-file" role="button" tabindex="0">기록 ZIP 가져오기<input id="import-file" type="file" accept=".zip,application/zip" hidden disabled></label></div><p class="transfer-footnote">같은 팀이라도 각 기기에서 따로 내보내세요. 다운로드 후에도 기록과 사진은 기기에 남습니다. 파일이 저장된 것을 확인한 뒤 분석 PC의 ‘현장 기록 가져오기’에서 여세요.</p></section>
     </div>
-    <footer><span>TiSC <strong>FIELD NOTES</strong></span><p>고객 정보는 서버로 전송하지 않습니다. 브라우저 데이터 삭제 전 반드시 기록을 내보내세요.</p></footer>
+    <footer><span>TiSC · 현장 상담 기록</span><p>이 브라우저의 기록만 표시합니다. 브라우저 데이터 삭제 전 기록을 내보내세요.</p></footer>
   </main>
   <dialog id="image-dialog"><div class="dialog-top"><strong id="image-name">명함 확인</strong><button id="close-image" class="button button-small button-outline" type="button">닫기</button></div><img id="large-image" alt="첨부한 명함 확대 보기"></dialog>
 </body>

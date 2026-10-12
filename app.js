@@ -50,6 +50,15 @@ function revision(record) {
   return new Date(Math.max(Date.now(), Date.parse(record.updatedAt) + 1)).toISOString();
 }
 function current() { return records.get(selectedId); }
+function setView(view) {
+  document.body.dataset.view = view;
+  for (const name of ['records', 'editor', 'transfer']) {
+    const button = $(`show-${name}`);
+    if (name === view) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  }
+  if (matchMedia('(max-width: 640px)').matches) window.scrollTo({ top: 0, behavior: 'instant' });
+}
 function node(tag, className, content) {
   const element = document.createElement(tag);
   if (className) element.className = className;
@@ -73,12 +82,12 @@ function updateStatus() {
 }
 function syncControls() {
   const locked = !ready || busy;
-  for (const id of ['team', 'visit-type', 'company', 'memo', 'manual-start', 'manual-end', 'card-file', 'toggle-times', 'save-times', 'end-record', 'next-record', 'new-record', 'retry-save', 'import-file']) $(id).disabled = locked;
+  for (const id of ['team', 'visit-type', 'company', 'memo', 'manual-start', 'manual-end', 'card-file', 'gallery-file', 'toggle-times', 'save-times', 'end-record', 'next-record', 'new-record', 'add-consultation', 'show-records', 'show-editor', 'show-transfer', 'retry-save', 'import-file']) $(id).disabled = locked;
   $('start-record').disabled = locked;
   $('export-date').disabled = locked || !records.size;
   $('export-all').disabled = locked || !records.size;
-  for (const button of document.querySelectorAll('.card-remove, .record-item')) button.disabled = locked;
-  for (const id of ['card-upload', 'import-label']) {
+  for (const button of document.querySelectorAll('.card-remove, .record-item, .other-session')) button.disabled = locked;
+  for (const id of ['card-upload', 'gallery-upload', 'import-label']) {
     $(id).setAttribute('aria-disabled', String(locked));
     $(id).tabIndex = locked ? -1 : 0;
   }
@@ -161,18 +170,31 @@ function renderList() {
   container.replaceChildren();
   const query = $('search').value.trim().toLocaleLowerCase('ko-KR');
   const day = $('filter-date').value;
-  const all = [...records.values()].sort((a, b) => b.startAt.localeCompare(a.startAt));
-  const visible = all.filter(record => (!day || kstDate(record.startAt) === day) && (!query || `${record.company} ${record.memo} ${record.team}`.toLocaleLowerCase('ko-KR').includes(query)));
+  const all = [...records.values()].sort((a, b) => Number(a.endAt !== null) - Number(b.endAt !== null) || b.startAt.localeCompare(a.startAt));
+  const dated = all.filter(record => !day || kstDate(record.startAt) === day);
+  const visible = dated.filter(record => !query || `${record.company} ${record.memo} ${record.team}`.toLocaleLowerCase('ko-KR').includes(query));
   $('record-count').textContent = visible.length;
   const activeCount = all.filter(record => record.endAt === null).length;
   $('active-count').textContent = `진행 중 ${activeCount}건`;
-  $('new-record').textContent = activeCount ? '+ 다른 회사 문의' : '+ 새 상담';
+  $('new-record').textContent = activeCount ? '+ 다른 상담 추가' : '+ 새 상담';
+  $('export-summary').textContent = `${day || '모든 날짜'} · 상담 ${dated.length}건 · 진행 중 ${dated.filter(record => record.endAt === null).length}건 포함 · 명함·명찰 ${dated.reduce((count, record) => count + record.cards.length, 0)}장`;
+  $('active-sessions').replaceChildren();
+  if (current()) {
+    for (const record of all.filter(record => record.id !== selectedId && record.endAt === null)) {
+      const button = node('button', 'other-session', `${record.company || '회사명 미입력'} · ${record.team || '조 미지정'} · ${kstTime(record.startAt, true)}부터 · 기록 전환`);
+      button.type = 'button';
+      button.dataset.id = record.id;
+      button.disabled = !ready || busy;
+      button.addEventListener('click', () => action(async () => { selectedId = record.id; renderSelected(); setView('editor'); }));
+      $('active-sessions').append(button);
+    }
+  }
   renderOverlap();
-  $('export-date').textContent = day ? '↓ 선택 날짜 내보내기' : '↓ 모든 날짜 내보내기';
+  $('export-date').textContent = day ? '선택 날짜 ZIP 다운로드' : '모든 날짜 ZIP 다운로드';
   if (!visible.length) {
     const empty = node('div', 'empty-state');
-    empty.append(node('div', 'empty-symbol', '＋'), node('strong', '', all.length ? '조건에 맞는 기록이 없습니다.' : '첫 번째 상담을 기다리고 있어요.'));
-    empty.append(node('p', '', all.length ? '검색어나 날짜를 바꾸어 확인해 주세요.' : '상담 시작을 누르면\n이곳에 기록이 차곡차곡 쌓입니다.'));
+    empty.append(node('div', 'empty-symbol', '＋'), node('strong', '', all.length ? '조건에 맞는 기록이 없습니다.' : '아직 기록된 상담이 없습니다.'));
+    empty.append(node('p', '', all.length ? '검색어나 날짜를 바꾸어 확인해 주세요.' : '새 상담에서 시작 시각을 기록하세요.'));
     container.append(empty);
     return;
   }
@@ -187,7 +209,7 @@ function renderList() {
     row.append(node('span', `record-state${record.endAt === null ? ' active' : ''}`, dirty.has(record.id) ? '저장 대기' : record.endAt === null ? '진행 중' : '기록 완료'));
     const time = `${!day ? `${kstDate(record.startAt)} · ` : ''}${kstTime(record.startAt)} — ${record.endAt ? kstTime(record.endAt) : '진행 중'} · ${record.team || '조 미지정'} · 명함 ${record.cards.length}장`;
     button.append(row, node('div', 'record-time', time), node('div', 'record-memo', `${record.visitType === 'visit' ? '다른 부스 방문' : '우리 부스 상담'}${record.memo ? ` · ${record.memo.replace(/\s+/g, ' ')}` : ''}`));
-    button.addEventListener('click', () => action(async () => { selectedId = record.id; renderSelected(); }));
+    button.addEventListener('click', () => action(async () => { selectedId = record.id; renderSelected(); setView('editor'); }));
     container.append(button);
   }
 }
@@ -252,7 +274,7 @@ function renderSelected() {
   $('record-form').hidden = !record;
   $('time-editor').hidden = true;
   $('toggle-times').setAttribute('aria-expanded', 'false');
-  $('editor-heading').textContent = record ? record.company || '회사명 미입력' : '새로운 상담';
+  $('editor-heading').textContent = record ? record.company || '회사명 미입력' : '새 상담';
   $('team').value = record ? record.team : defaultTeam;
   $('visit-type').value = record ? record.visitType : defaultVisit;
   if (record) {
@@ -263,6 +285,7 @@ function renderSelected() {
     $('session-banner').classList.toggle('ended', Boolean(record.endAt));
     $('end-record').hidden = Boolean(record.endAt);
     $('next-record').hidden = !record.endAt;
+    $('add-consultation').hidden = Boolean(record.endAt);
     $('next-record').textContent = [...records.values()].some(other => other.id !== record.id && other.endAt === null) ? '진행 중 상담으로 돌아가기' : '다음 상담 준비';
     $('manual-start').value = kstInput(record.startAt);
     $('manual-end').value = kstInput(record.endAt);
@@ -276,6 +299,10 @@ function renderSelected() {
 $('filter-date').value = kstDate();
 $('team').value = defaultTeam;
 $('visit-type').value = defaultVisit;
+setView('records');
+for (const view of ['records', 'editor', 'transfer']) {
+  $(`show-${view}`).addEventListener('click', () => action(async () => { setView(view); }));
+}
 $('search').addEventListener('input', renderList);
 $('filter-date').addEventListener('change', renderList);
 $('all-dates').addEventListener('click', () => { $('filter-date').value = ''; renderList(); });
@@ -305,6 +332,7 @@ function startConsultation() {
     $('filter-date').value = kstDate(record.startAt);
     $('search').value = '';
     renderSelected();
+    setView('editor');
     message('상담 시작 시각을 기록했습니다. 녹음은 별도 녹음기에서 진행해 주세요.');
     setTimeout(() => $('company').focus(), 0);
   });
@@ -331,8 +359,9 @@ function prepareNew() {
     } else {
       selectedId = null;
       renderSelected();
-      $('start-record').focus();
     }
+    setView('editor');
+    if (!active) $('start-record').focus();
     if (matchMedia('(max-width: 640px)').matches) $('editor-heading').scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 }
@@ -340,6 +369,7 @@ $('new-record').addEventListener('click', () => {
   if ([...records.values()].some(record => record.endAt === null)) startConsultation();
   else prepareNew();
 });
+$('add-consultation').addEventListener('click', startConsultation);
 $('next-record').addEventListener('click', prepareNew);
 $('retry-save').addEventListener('click', () => action(async () => { message('입력한 내용을 기기에 저장했습니다.'); }));
 $('toggle-times').addEventListener('click', () => {
@@ -388,7 +418,7 @@ async function compressedImage(file) {
     throw new Error(`${file.name}: ${error.message || '사진을 읽지 못했습니다.'}`);
   } finally { URL.revokeObjectURL(url); }
 }
-for (const [labelId, inputId] of [['card-upload', 'card-file'], ['import-label', 'import-file']]) {
+for (const [labelId, inputId] of [['card-upload', 'card-file'], ['gallery-upload', 'gallery-file'], ['import-label', 'import-file']]) {
   $(labelId).addEventListener('keydown', event => {
     if ((event.key === 'Enter' || event.key === ' ') && !$(inputId).disabled) {
       event.preventDefault();
@@ -396,8 +426,9 @@ for (const [labelId, inputId] of [['card-upload', 'card-file'], ['import-label',
     }
   });
 }
-$('card-file').addEventListener('change', () => {
-  const files = [...$('card-file').files];
+for (const inputId of ['card-file', 'gallery-file']) $(inputId).addEventListener('change', () => {
+  const input = $(inputId);
+  const files = [...input.files];
   if (!files.length) return;
   action(async () => {
     let count = 0;
@@ -417,7 +448,7 @@ $('card-file').addEventListener('change', () => {
       renderList();
       message(`명함 ${count}장을 기기에 저장했습니다. 확대해서 글씨를 확인해 주세요.`);
     }
-  }).finally(() => { $('card-file').value = ''; });
+  }).finally(() => { input.value = ''; });
 });
 $('close-image').addEventListener('click', () => $('image-dialog').close());
 $('image-dialog').addEventListener('close', () => {
@@ -441,7 +472,6 @@ function exportRecords(allDates) {
     const day = allDates ? '' : $('filter-date').value;
     const selected = [...records.values()].filter(record => !day || kstDate(record.startAt) === day).sort((a, b) => a.startAt.localeCompare(b.startAt));
     if (!selected.length) throw new Error('내보낼 상담 기록이 없습니다. 날짜를 확인해 주세요.');
-    if (selected.some(record => record.endAt === null) && !confirm('진행 중인 상담도 포함되어 있습니다. 종료 시각 없이 현재까지의 기록을 내보낼까요?')) return;
     const attached = selected.flatMap(record => record.cards.map(card => cards.get(card.id)));
     const blob = await createBundle(selected, attached);
     const stamp = kstInput(new Date().toISOString()).replace(/[:T]/g, '-');
