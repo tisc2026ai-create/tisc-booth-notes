@@ -74,7 +74,7 @@ function updateStatus() {
 function syncControls() {
   const locked = !ready || busy;
   for (const id of ['team', 'visit-type', 'company', 'memo', 'manual-start', 'manual-end', 'card-file', 'toggle-times', 'save-times', 'end-record', 'next-record', 'new-record', 'retry-save', 'import-file']) $(id).disabled = locked;
-  $('start-record').disabled = locked || [...records.values()].some(record => record.endAt === null);
+  $('start-record').disabled = locked;
   $('export-date').disabled = locked || !records.size;
   $('export-all').disabled = locked || !records.size;
   for (const button of document.querySelectorAll('.card-remove, .record-item')) button.disabled = locked;
@@ -142,6 +142,20 @@ async function action(task, allowDraftExport = false) {
   }
 }
 
+export function overlappingRecords(selected, candidates) {
+  if (!selected) return [];
+  const start = Date.parse(selected.startAt);
+  const end = selected.endAt === null ? Infinity : Date.parse(selected.endAt);
+  return [...candidates].filter(record => record.id !== selected.id && record.team.trim() === selected.team.trim()
+    && Math.max(start, Date.parse(record.startAt)) < Math.min(end, record.endAt === null ? Infinity : Date.parse(record.endAt)));
+}
+function renderOverlap() {
+  const overlapping = overlappingRecords(current(), records.values());
+  const warning = $('overlap-warning');
+  warning.hidden = !overlapping.length;
+  const companies = overlapping.slice(0, 2).map(record => record.company.trim() || '회사명 미입력').join(', ');
+  warning.textContent = overlapping.length ? `${companies}${overlapping.length > 2 ? ` 외 ${overlapping.length - 2}곳` : ''} 상담과 시간이 겹칩니다. 각 회사의 발언을 메모로 구분해 주세요. 녹음 분석 시 확인이 필요합니다.` : '';
+}
 function renderList() {
   const container = $('record-list');
   container.replaceChildren();
@@ -150,6 +164,10 @@ function renderList() {
   const all = [...records.values()].sort((a, b) => b.startAt.localeCompare(a.startAt));
   const visible = all.filter(record => (!day || kstDate(record.startAt) === day) && (!query || `${record.company} ${record.memo} ${record.team}`.toLocaleLowerCase('ko-KR').includes(query)));
   $('record-count').textContent = visible.length;
+  const activeCount = all.filter(record => record.endAt === null).length;
+  $('active-count').textContent = `진행 중 ${activeCount}건`;
+  $('new-record').textContent = activeCount ? '+ 다른 회사 문의' : '+ 새 상담';
+  renderOverlap();
   $('export-date').textContent = day ? '↓ 선택 날짜 내보내기' : '↓ 모든 날짜 내보내기';
   if (!visible.length) {
     const empty = node('div', 'empty-state');
@@ -245,6 +263,7 @@ function renderSelected() {
     $('session-banner').classList.toggle('ended', Boolean(record.endAt));
     $('end-record').hidden = Boolean(record.endAt);
     $('next-record').hidden = !record.endAt;
+    $('next-record').textContent = [...records.values()].some(other => other.id !== record.id && other.endAt === null) ? '진행 중 상담으로 돌아가기' : '다음 상담 준비';
     $('manual-start').value = kstInput(record.startAt);
     $('manual-end').value = kstInput(record.endAt);
     updateDuration();
@@ -273,24 +292,24 @@ $('visit-type').addEventListener('change', () => {
   try { localStorage.setItem('tisc-visit', defaultVisit); } catch { /* 기기 설정만 선택적으로 보관합니다. */ }
   edit({ visitType: defaultVisit });
 });
-$('start-record').addEventListener('click', () => {
+function startConsultation() {
   const clickedAt = new Date().toISOString();
+  const team = $('team').value;
+  const visitType = $('visit-type').value;
   action(async () => {
-  const active = [...records.values()].filter(record => record.endAt === null);
-  if (active.length) throw new Error('진행 중인 상담을 먼저 종료해 주세요. 목록에서 해당 상담을 선택할 수 있습니다.');
-  const now = clickedAt;
-  const record = { id: crypto.randomUUID(), createdAt: now, updatedAt: now, startAt: now, endAt: null, company: '', memo: '', team: $('team').value, visitType: $('visit-type').value, cards: [] };
-  await saveRecord(record, null);
-  persistedRevision.set(record.id, record.updatedAt);
-  records.set(record.id, record);
-  selectedId = record.id;
-  $('filter-date').value = kstDate(record.startAt);
-  $('search').value = '';
-  renderSelected();
-  message('상담 시작 시각을 기록했습니다. 녹음은 별도 녹음기에서 진행해 주세요.');
-  setTimeout(() => $('company').focus(), 0);
+    const record = { id: crypto.randomUUID(), createdAt: clickedAt, updatedAt: clickedAt, startAt: clickedAt, endAt: null, company: '', memo: '', team, visitType, cards: [] };
+    await saveRecord(record, null);
+    persistedRevision.set(record.id, record.updatedAt);
+    records.set(record.id, record);
+    selectedId = record.id;
+    $('filter-date').value = kstDate(record.startAt);
+    $('search').value = '';
+    renderSelected();
+    message('상담 시작 시각을 기록했습니다. 녹음은 별도 녹음기에서 진행해 주세요.');
+    setTimeout(() => $('company').focus(), 0);
   });
-});
+}
+$('start-record').addEventListener('click', startConsultation);
 $('end-record').addEventListener('click', () => {
   const clickedAt = new Date().toISOString();
   action(async () => {
@@ -304,11 +323,11 @@ $('end-record').addEventListener('click', () => {
 });
 function prepareNew() {
   action(async () => {
-    const active = [...records.values()].find(record => record.endAt === null);
+    const active = [...records.values()].filter(record => record.endAt === null).sort((a, b) => b.startAt.localeCompare(a.startAt))[0];
     if (active) {
       selectedId = active.id;
       renderSelected();
-      message('진행 중인 상담을 표시했습니다. 새 상담을 시작하려면 먼저 종료해 주세요.', 'warning');
+      message('진행 중인 상담으로 돌아왔습니다. 각 상담의 종료 시각을 따로 기록해 주세요.');
     } else {
       selectedId = null;
       renderSelected();
@@ -317,7 +336,10 @@ function prepareNew() {
     if (matchMedia('(max-width: 640px)').matches) $('editor-heading').scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
 }
-$('new-record').addEventListener('click', prepareNew);
+$('new-record').addEventListener('click', () => {
+  if ([...records.values()].some(record => record.endAt === null)) startConsultation();
+  else prepareNew();
+});
 $('next-record').addEventListener('click', prepareNew);
 $('retry-save').addEventListener('click', () => action(async () => { message('입력한 내용을 기기에 저장했습니다.'); }));
 $('toggle-times').addEventListener('click', () => {
@@ -334,7 +356,6 @@ $('save-times').addEventListener('click', () => action(async () => {
   const startAt = parseKst($('manual-start').value);
   const endAt = $('manual-end').value ? parseKst($('manual-end').value) : null;
   if (endAt && endAt < startAt) throw new Error('종료 시각은 시작 시각보다 빠를 수 없습니다.');
-  if (!endAt && [...records.values()].some(record => record.id !== selectedId && record.endAt === null)) throw new Error('다른 진행 중인 상담이 있습니다. 그 상담을 종료한 뒤 변경해 주세요.');
   edit({ startAt, endAt });
   await flushPending();
   $('filter-date').value = kstDate(startAt);

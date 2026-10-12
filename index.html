@@ -16,7 +16,7 @@
     <div class="header-right"><span class="local-badge"><span class="status-dot"></span>이 기기에 저장</span><span id="clock" class="clock">한국 시각 확인 중</span></div>
   </header>
   <main>
-    <div class="page-heading"><div><p class="eyebrow">FIELD NOTES / 현장 기록</p><h1>좋은 만남을,<br class="mobile-break"> 놓치지 않도록.</h1><p class="heading-copy">응대에 집중하세요. 상담 시간과 짧은 메모, 명함을 함께 남깁니다.</p></div><div class="event-label"><span>2026 강릉 ITS 세계총회</span><strong>10.19 — 10.23</strong></div></div>
+    <div class="page-heading"><div><p class="eyebrow">FIELD NOTES / 현장 기록</p><h1>현장 상담 기록</h1><p class="heading-copy">상담 시간, 메모, 명함을 기록합니다.</p></div><div class="event-label"><span>2026 강릉 ITS 세계총회</span><strong>10.19 — 10.23</strong></div></div>
     <div class="storage-note"><span class="note-symbol" aria-hidden="true">↳</span><p><strong>기록은 이 기기의 브라우저에만 저장됩니다.</strong> 쉬는 시간과 마감 때 ZIP으로 내보내 별도 보관하세요. 녹음은 별도 녹음기로 진행합니다.</p><span id="offline-status" class="offline-status">오프라인 준비 확인 중</span></div>
     <div id="message" class="message" role="status" aria-live="polite" hidden></div>
     <div id="storage-error" class="error-box" role="alert" hidden></div>
@@ -24,7 +24,7 @@
       <section class="records-panel" aria-labelledby="records-heading">
         <div class="panel-heading"><div><p class="eyebrow">CONSULTATIONS</p><h2 id="records-heading">상담 기록 <span id="record-count" class="count">0</span></h2></div><button id="new-record" class="text-button" type="button" disabled>+ 새 상담</button></div>
         <div class="list-tools"><label class="search-wrap"><span class="sr-only">회사명 또는 메모 검색</span><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4.5 4.5"/></svg><input id="search" type="search" placeholder="회사명 또는 메모 검색" autocomplete="off"></label><label class="date-wrap"><span class="sr-only">기록 날짜 (한국 시각)</span><input id="filter-date" type="date" aria-label="기록 날짜 (한국 시각)"></label></div>
-        <div class="list-caption"><span>한국 시각 · 시작일 기준</span><button id="all-dates" class="text-button subtle" type="button">모든 날짜</button></div>
+        <div class="list-caption"><span>한국 시각 · 시작일 기준 <span id="active-count" class="active-count">진행 중 0건</span></span><button id="all-dates" class="text-button subtle" type="button">모든 날짜</button></div>
         <div id="record-list" class="record-list" aria-label="상담 목록"></div>
         <div class="transfer-panel"><div class="transfer-heading"><h3>기록을 파일로 전달</h3><span class="file-tag">ZIP</span></div><p>상담 내용과 연결된 명함 사진을 함께 담습니다.</p><button id="export-date" class="button button-outline wide" type="button" disabled><span aria-hidden="true">↓</span> 선택 날짜 내보내기</button><div class="secondary-actions"><button id="export-all" class="text-button" type="button" disabled>전체 기록 백업</button><label id="import-label" class="text-button import-label" for="import-file" role="button" tabindex="0">기록 ZIP 가져오기<input id="import-file" type="file" accept=".zip,application/zip" hidden disabled></label></div><p class="transfer-footnote">다운로드된 파일을 확인한 뒤 분석 PC로 옮겨주세요.</p></div>
       </section>
@@ -34,6 +34,7 @@
         <div id="start-panel" class="start-panel"><div class="start-icon" aria-hidden="true"><svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="12"/><path d="M16 8v8l5 3"/></svg></div><h3>대화가 시작되면 눌러주세요.</h3><p>현재 날짜와 시각을 초 단위로 기록합니다.<br>기기 시계를 녹음기와 먼저 맞춰주세요.</p><button id="start-record" class="button button-primary wide" type="button" disabled><span aria-hidden="true">＋</span> 상담 시작</button></div>
         <form id="record-form" hidden>
           <div id="session-banner" class="session-banner"><span><span class="status-dot"></span><strong id="session-state">상담 진행 중</strong></span><strong id="duration">00:00</strong></div>
+          <div id="overlap-warning" class="overlap-warning" role="status" hidden></div>
           <div class="time-summary"><span>시작 <strong id="start-label">—</strong></span><span>종료 <strong id="end-label">—</strong></span><button id="toggle-times" class="text-button subtle" type="button" aria-expanded="false">시각 수정</button></div>
           <div id="time-editor" class="time-editor" hidden><p>입력 시각은 한국 시각(UTC+09:00)입니다.</p><label>상담 시작<input id="manual-start" type="datetime-local" step="1" required></label><label>상담 종료<input id="manual-end" type="datetime-local" step="1"></label><p class="field-help">종료 시각을 비우면 진행 중인 상담으로 변경됩니다.</p><button id="save-times" class="button button-small button-outline" type="button">시각 적용</button></div>
           <label class="field-label" for="company">회사명 <span class="optional">나중에 입력해도 됩니다</span></label><input id="company" class="company-input" type="text" maxlength="200" placeholder="어느 회사와 이야기하셨나요?" autocomplete="organization">

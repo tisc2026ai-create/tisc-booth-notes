@@ -71,6 +71,7 @@ try {
     throw new Error(`Condition did not become true: ${expression}`);
   }
   await eventually('document.readyState === "complete" && document.body.innerText.includes("TiSC")');
+  assert.equal(await evaluate('document.querySelector("h1").innerText.trim()'),'현장 상담 기록');
   const fixture = await evaluate(`(async () => {
     const db = await import('./storage.js'); const archive = await import('./archive.js');
     await db.openStorage();
@@ -126,6 +127,23 @@ try {
   const fileInput=await send('DOM.querySelector',{nodeId:dom.root.nodeId,selector:'#card-file'});
   await send('DOM.setFileInputFiles',{nodeId:fileInput.nodeId,files:[pngPath]});
   await eventually('(async()=>{const db=await import("./storage.js");return (await db.getRecords()).some(r=>r.company==="실제 버튼 상담" && r.cards.length===1);})()');
+  await eventually('!document.querySelector("#new-record").disabled');
+  await evaluate('document.querySelector("#new-record").click()');
+  await eventually('document.querySelector("#company").value === "" && !document.querySelector("#company").disabled');
+  await evaluate(`(() => {
+    for(const [id,value] of [['company','갑작스러운 문의 회사'],['memo','명함 전달 후 추후 연락 요청']]) {
+      const input=document.getElementById(id);input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));
+    }
+  })()`);
+  await eventually('(async()=>{const db=await import("./storage.js");const records=await db.getRecords();return records.filter(r=>r.endAt===null).length===2 && records.some(r=>r.company==="갑작스러운 문의 회사");})()');
+  assert.ok(await evaluate('!document.querySelector("#overlap-warning").hidden'),'Overlapping consultations must be visible');
+  assert.ok(await evaluate('document.querySelector("#active-count").textContent.includes("2")'),'Both unfinished consultations must stay visible');
+  await eventually('!document.querySelector("#end-record").disabled');
+  await evaluate('document.querySelector("#end-record").click()');
+  await eventually('(async()=>{const db=await import("./storage.js");const records=await db.getRecords();return records.some(r=>r.company==="갑작스러운 문의 회사" && r.endAt!==null) && records.some(r=>r.company==="실제 버튼 상담" && r.endAt===null);})()');
+  await eventually('!document.querySelector("#next-record").disabled');
+  await evaluate('document.querySelector("#next-record").click()');
+  await eventually('document.querySelector("#company").value === "실제 버튼 상담" && !document.querySelector("#end-record").hidden');
   await eventually('!document.querySelector("#end-record").disabled');
   await evaluate('document.querySelector("#end-record").click()');
   await eventually('(async()=>{const db=await import("./storage.js");return (await db.getRecords()).some(r=>r.company==="실제 버튼 상담" && r.endAt!==null);})()');
@@ -141,12 +159,12 @@ try {
   }
   assert.ok(zipPath,'UI did not download a ZIP');
   const exported=await readBundle(new Blob([await readFile(zipPath)]));
-  assert.equal(exported.records.length,2);assert.equal(exported.cards.length,2);
+  assert.equal(exported.records.length,3);assert.equal(exported.cards.length,2);
   const importInput=await send('DOM.querySelector',{nodeId:dom.root.nodeId,selector:'#import-file'});
   await eventually('!document.querySelector("#import-file").disabled');
   await send('DOM.setFileInputFiles',{nodeId:importInput.nodeId,files:[zipPath]});
   await eventually('document.querySelector("#message").textContent.includes("기록 가져오기 완료")');
-  assert.equal(await evaluate('(async()=>{const db=await import("./storage.js");return (await db.getRecords()).length;})()'),2);
+  assert.equal(await evaluate('(async()=>{const db=await import("./storage.js");return (await db.getRecords()).length;})()'),3);
   await evaluate(`(() => {
     for(const [id,value] of [['company','A 도로운영사 · 테스트'],['memo','높이 제한 검지 시스템 교체 문의\\n현장 데모 요청']]) {
       const input=document.getElementById(id);input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));
@@ -172,7 +190,7 @@ try {
     await eventually('document.body.innerText.includes("A 도로운영사 · 테스트")');
   }
   assert.deepEqual(exceptions, [], `Browser exceptions: ${exceptions.join(', ')}`);
-  console.log('PASS: start/edit/end/photo/export/import UI, real IndexedDB, ZIP roundtrip, duplicate/conflict/stale-tab protection, persistence, desktop/mobile layout, offline reload');
+  console.log('PASS: consultation and interruption UI, overlap warning, photo/export/import, real IndexedDB, ZIP roundtrip, duplicate/conflict/stale-tab protection, persistence, desktop/mobile layout, offline reload');
   console.log(`Screenshots: ${artifactDir}`);
 } finally {
   socket?.close();

@@ -1,5 +1,5 @@
 // 화면 파일을 변경해 게시할 때 캐시 버전도 함께 올립니다.
-const CACHE = 'tisc-field-notes-v1';
+const CACHE = 'tisc-field-notes-v2';
 const ASSETS = ['./', './index.html', './styles.css', './app.js', './archive.js', './storage.js', './icons/icon.svg'];
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS)));
