@@ -78,6 +78,8 @@ try {
   }
   await eventually('document.readyState === "complete" && document.body.innerText.includes("TiSC")');
   assert.equal(await evaluate('document.querySelector("h1").innerText.trim()'),'현장 상담 기록');
+  assert.equal(await evaluate('document.querySelector("#backup-url").value'),'https://tisc-backup.tail125579.ts.net','A new browser must show the configured PC address without connecting automatically');
+  assert.equal(await evaluate('localStorage.getItem("tisc-pc-backup")'),null,'Showing the default address must not save a backup connection');
   assert.equal(await evaluate('document.querySelector("#team")'),null,'The recorder must not ask users to choose a team');
   assert.equal(await evaluate('document.querySelector("#visit-type")'),null,'The field recorder must focus on our booth without a visit-type selector');
   assert.equal(await evaluate(`(async()=>{
