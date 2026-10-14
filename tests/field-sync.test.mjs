@@ -25,4 +25,8 @@ test('an empty cleared browser cannot overwrite its PC backup, and failed sends 
   await sync.send();
   assert.equal(posted,1); assert.equal(sync.signature,null); assert.match(status,/기기 자료 유지/);
   await sync.send(); assert.equal(posted,2);
+  sync.request = async()=>{sync.config=null;status='PC 자동 백업 연결 안 됨';return new Response(JSON.stringify({records:1,savedAt:new Date().toISOString()}));};
+  await sync.send();
+  assert.equal(status,'PC 자동 백업 연결 안 됨','A late reply must not claim backup is connected after disconnection');
+  assert.equal(sync.signature,null);
 });

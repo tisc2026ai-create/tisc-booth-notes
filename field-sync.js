@@ -49,6 +49,7 @@ export class FieldSync {
     if (this.running || !this.config) return;
     if (!navigator.onLine) { this.status('PC 백업 대기 · 기기에 저장됨'); this.schedule(30000); return; }
     this.running = true;
+    const connection = this.config;
     try {
       this.lastRevision = Math.max(Date.now(), this.lastRevision + 1);
       const revision = this.lastRevision;
@@ -60,10 +61,11 @@ export class FieldSync {
       this.status('PC로 백업 중…');
       const response = await this.request('POST', await createBundle(snapshot.records, snapshot.cards), revision);
       const result = await response.json();
+      if (this.config !== connection) return;
       this.signature = signature;
       this.status(`PC 백업 완료 · ${result.records}건 · ${new Date(result.savedAt).toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit'})}`);
     } catch (error) {
-      this.status(`PC 백업 대기 · ${error.message || '연결 확인 필요'} · 기기 자료 유지`);
+      if (this.config === connection) this.status(`PC 백업 대기 · ${error.message || '연결 확인 필요'} · 기기 자료 유지`);
     } finally {
       this.running = false; if (this.config) this.schedule(30000);
     }
