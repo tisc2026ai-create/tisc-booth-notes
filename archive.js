@@ -90,7 +90,7 @@ function crc32(bytes) {
   return (value ^ 0xffffffff) >>> 0;
 }
 
-function validateImage(bytes, type) {
+export function validateImage(bytes, type) {
   const jpg = bytes.length >= 3 && bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255;
   const png = bytes.length >= 8 && [137, 80, 78, 71, 13, 10, 26, 10].every((byte, index) => bytes[index] === byte);
   const webp = bytes.length >= 12 && String.fromCharCode(...bytes.subarray(0, 4)) === 'RIFF'

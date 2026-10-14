@@ -78,6 +78,15 @@ export async function getCards() {
   });
 }
 
+export async function getSnapshot() {
+  return transaction(['records', 'cards'], 'readonly', (tx, receive, result) => {
+    const snapshot = {};
+    receive(tx.objectStore('records').getAll(), records => { snapshot.records = records; });
+    receive(tx.objectStore('cards').getAll(), cards => { snapshot.cards = cards; });
+    result(snapshot);
+  });
+}
+
 function sameRecord(left, right) {
   return JSON.stringify(validateRecord(left)) === JSON.stringify(validateRecord(right));
 }
@@ -215,7 +224,8 @@ export async function importRecords(bundle) {
     ids.add(card.id);
   }
   // 명함 검증과 해시는 트랜잭션 전에 완료해 비동기 대기 중 일부만 저장되는 일을 막습니다.
-  const incomingCards = await Promise.all(bundle.cards.map(card => prepareCard(byId.get(card.recordId), card)));
+  const incomingCards = [];
+  for (const card of bundle.cards) incomingCards.push(await prepareCard(byId.get(card.recordId), card));
   const incomingById = new Map(incomingCards.map(card => [card.id, card]));
   return transaction(['records', 'cards'], 'readwrite', (tx, receive, result) => {
     const recordStore = tx.objectStore('records');

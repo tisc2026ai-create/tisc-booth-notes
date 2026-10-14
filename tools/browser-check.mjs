@@ -224,20 +224,44 @@ try {
   await eventually('document.querySelector("#save-status").textContent.includes("기기에 저장됨")');
   assert.ok(await evaluate(`(async()=>{
     const {FieldSync}=await import('./field-sync.js'), db=await import('./storage.js');
-    const records=await db.getRecords(), cards=await db.getCards();
-    const originalFetch=window.fetch;let saved=null,authorization='';
-    window.fetch=async(_url,options)=>{authorization=options.headers.Authorization;
-      if(options.method==='POST'){saved=options.body;return new Response(JSON.stringify({records:records.length,savedAt:new Date().toISOString()}),{status:200});}
-      return new Response(saved,{status:200,headers:{'Content-Type':'application/zip'}});
+    const snapshot=await db.getSnapshot(), originalFetch=window.fetch, blobs=new Map();
+    let saved=null,authorization='',sent=0,loseReply=true,resumeOffset=null;
+    const reply=value=>new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json'}});
+    window.fetch=async(_url,options)=>{
+      authorization=options.headers.Authorization;
+      const url=new URL(_url),path=url.pathname.split('/sync')[1];
+      if(path==='/status')return reply({chunkBytes:1024,revision:saved?.revision||0,records:saved?.records||[],hashes:saved?.photos||[],
+        photos:JSON.parse(options.body).photos.map(photo=>({sha256:photo.sha256,offset:blobs.get(photo.sha256)?.bytes.length||0,complete:blobs.get(photo.sha256)?.complete||false}))});
+      if(path.startsWith('/blobs/')){
+        const hash=path.split('/').at(-1);
+        if(options.method!=='POST'){const photo=blobs.get(hash);return new Response(photo.bytes,{headers:{'Content-Type':photo.type}});}
+        const offset=Number(url.searchParams.get('offset')),incoming=new Uint8Array(await options.body.arrayBuffer()),bytes=new Uint8Array(offset+incoming.length);
+        if(offset)bytes.set(blobs.get(hash).bytes);bytes.set(incoming,offset);sent+=incoming.length;
+        blobs.set(hash,{bytes,type:url.searchParams.get('type'),complete:bytes.length===Number(url.searchParams.get('size'))});
+        if(loseReply){loseReply=false;throw new Error('Synthetic lost photo acknowledgement');}
+        if(resumeOffset===null)resumeOffset=offset;
+        return reply({offset:bytes.length,complete:blobs.get(hash).complete});
+      }
+      if(options.method==='POST'){saved=JSON.parse(options.body);return reply({records:saved.records.length,photos:saved.photos.length,revision:saved.revision,savedAt:new Date().toISOString()});}
+      return reply(saved);
     };
     try{
-      const sync=new FieldSync(async()=>({records,cards}),()=>{});sync.schedule=()=>{};
-      sync.config={url:'https://backup.example.ts.net',token:'x'.repeat(43),deviceId:crypto.randomUUID(),label:'검증 기기'};
-      await sync.send();const restored=await sync.restore();
-      return authorization==='Bearer '+'x'.repeat(43) && JSON.stringify(restored.records)===JSON.stringify(records)
-        && restored.cards.length===cards.length && restored.cards.some(photo=>photo.kind==='product'&&photo.caption==='현장에서 확인한 제품');
+      const connection={url:'https://backup.example.ts.net',token:'x'.repeat(43),deviceId:crypto.randomUUID(),label:'검증 기기'};
+      const first=new FieldSync(async()=>snapshot,()=>{});first.schedule=()=>{};first.connect(connection);
+      await first.send();if(first.signature!==null||saved!==null)throw new Error('An incomplete photo must not commit a backup');
+      const sync=new FieldSync(async()=>snapshot,()=>{});sync.schedule=()=>{};await sync.send();
+      if(resumeOffset!==1024)throw new Error('Reload must resume after the confirmed photo bytes');
+      const uploaded=sent;snapshot.records[0].memo+=' · 백업 메모만 수정';snapshot.records[0].updatedAt=new Date(Date.parse(snapshot.records[0].updatedAt)+1).toISOString();
+      await sync.send();sync.connect(connection);await sync.send();
+      if(sent!==uploaded)throw new Error('Memo updates and reconnection must upload zero unchanged photo bytes');
+      const baseline=sync.progress.revision,restored=await sync.restore();sync.cancelRestore(restored);
+      if(sync.progress.revision!==baseline)throw new Error('Cancelled restore must preserve the backup baseline');
+      const sorted=[...snapshot.records].sort((a,b)=>a.id.localeCompare(b.id));
+      sync.disconnect();
+      return authorization==='Bearer '+'x'.repeat(43) && JSON.stringify(restored.records)===JSON.stringify(sorted)
+        && restored.cards.length===snapshot.cards.length && restored.cards.some(photo=>photo.kind==='product'&&photo.caption==='현장에서 확인한 제품');
     }finally{window.fetch=originalFetch;}
-  })()`),'Authenticated PC backup and restore must preserve record revisions, photo purpose and descriptions');
+  })()`),'Incremental backup must resume lost acknowledgements, send no unchanged photos, preserve revisions/photo metadata and keep cancelled restore baselines');
   await evaluate('document.querySelector(".other-session").click()');
   await eventually('document.querySelector("#company").value === "갑작스러운 문의 회사" && !document.querySelector("#end-record").disabled');
   await eventually('!document.querySelector("#end-record").disabled');

@@ -1,5 +1,5 @@
 import { createBundle, readBundle, validateRecord } from './archive.js';
-import { openStorage, getRecords, getCards, saveRecord, saveCard, deleteCard, deleteRecords, importRecords } from './storage.js';
+import { openStorage, getRecords, getCards, getSnapshot, saveRecord, saveCard, deleteCard, deleteRecords, importRecords } from './storage.js';
 import {FieldSync, backupConfig} from './field-sync.js';
 
 const $ = id => document.getElementById(id);
@@ -18,11 +18,7 @@ let saveError = null;
 let dialogUrl = null;
 let pendingDelete = null;
 const PHOTO_KINDS = {card: '명함', badge: '명찰', product: '제품', booth: '부스·현장', other: '기타'};
-const pcBackup = new FieldSync(async () => {
-  const [savedRecords, savedCards] = await Promise.all([getRecords(), getCards()]);
-  savedRecords.sort((a, b) => a.id.localeCompare(b.id));
-  return {records: savedRecords, cards: savedCards};
-}, text => { $('pc-backup-status').textContent = text; });
+const pcBackup = new FieldSync(getSnapshot, text => { $('pc-backup-status').textContent = text; });
 
 function kstDate(value = new Date()) {
   return new Date(new Date(value).getTime() + KST).toISOString().slice(0, 10);
@@ -406,6 +402,7 @@ $('delete-confirm').addEventListener('click', async () => {
     const target = pendingDelete;
     await deleteRecords([target]);
     records.delete(target.id);
+    if (!records.size) pcBackup.noteEmptyDeletion();
     persistedRevision.delete(target.id);
     dirty.delete(target.id);
     for (const [id, card] of cards) if (card.recordId === target.id) cards.delete(id);
@@ -620,9 +617,12 @@ $('pc-backup-form').addEventListener('submit', event => {
 $('backup-disconnect').addEventListener('click', () => { pcBackup.disconnect(); $('backup-message').textContent = 'PC의 기존 백업은 남겨 두고 이 기기의 자동 전송만 중지했습니다.'; });
 $('backup-restore').addEventListener('click', () => action(async () => {
   const bundle = await pcBackup.restore();
-  if (!confirm(`PC에 보관한 상담 ${bundle.records.length}건과 사진 ${bundle.cards.length}장을 복원할까요? 같은 기록은 최신 수정본을 유지합니다.`)) return;
-  await importRecords(bundle); await reloadData(); selectedId = null; renderSelected();
-  $('backup-message').textContent = 'PC 백업을 이 브라우저에 복원했습니다.';
+  try {
+    if (!confirm(`PC에 보관한 상담 ${bundle.records.length}건과 사진 ${bundle.cards.length}장을 복원할까요? 같은 기록은 최신 수정본을 유지합니다.`)) return;
+    await importRecords(bundle); await reloadData(); selectedId = null; renderSelected();
+    pcBackup.acknowledgeRestore(bundle);
+    $('backup-message').textContent = 'PC 백업을 이 브라우저에 복원했습니다.';
+  } finally { pcBackup.cancelRestore(bundle); }
 }));
 window.addEventListener('online', () => pcBackup.schedule(0));
 if (ready) pcBackup.schedule();
