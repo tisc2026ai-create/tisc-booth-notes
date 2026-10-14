@@ -17,7 +17,7 @@
   </header>
   <main>
     <div class="page-heading"><div><h1>현장 상담 기록</h1><p class="heading-copy">상담 시각과 메모, 명함을 이 기기에 보관합니다.</p></div><div class="event-label"><span>2026 강릉 ITS 세계총회</span><strong>10.19 — 10.23</strong></div></div>
-    <div class="storage-note"><p><strong>기기마다 기록이 따로 저장됩니다.</strong> 쉬는 시간과 마감 때 각 기기에서 ZIP을 내려받아 보관하세요. 녹음은 별도로 진행합니다.</p><span id="offline-status" class="offline-status">오프라인 준비 확인 중</span></div>
+    <div class="storage-note"><p><strong>기기마다 기록이 따로 저장됩니다.</strong> 브라우저의 쿠키·사이트 데이터를 지우면 기록도 삭제됩니다. 모든 날짜 ZIP 백업을 별도로 보관하세요. 녹음은 별도로 진행합니다.</p><span id="offline-status" class="offline-status">오프라인 준비 확인 중</span></div>
     <div id="message" class="message" role="status" aria-live="polite" hidden></div>
     <div id="storage-error" class="error-box" role="alert" hidden></div>
     <nav id="field-nav" class="field-nav" aria-label="현장 화면"><button id="show-records" type="button" aria-current="page">상담 목록</button><button id="show-editor" type="button">상담 입력</button><button id="show-transfer" type="button">내보내기</button></nav>
@@ -44,12 +44,14 @@
           <div id="active-sessions" class="active-sessions" aria-label="다른 진행 중 상담"></div><button id="add-consultation" class="button button-outline wide" type="button">+ 다른 상담 추가</button>
           <div class="editor-actions"><button id="retry-save" class="button button-outline" type="button" hidden>저장 다시 시도</button><button id="end-record" class="button button-primary wide" type="button">상담 종료 · 시간 저장</button><button id="next-record" class="button button-primary wide" type="button" hidden>다음 상담 준비</button></div>
           <p class="editor-footnote">시간 기록용 · 음성 녹음과 AI 분석은 별도 진행</p>
+          <div class="record-delete-actions"><button id="delete-record" class="text-button" type="button" disabled>이 상담 삭제</button></div>
         </form>
       </section>
       <section class="transfer-panel" aria-labelledby="transfer-heading"><h2 id="transfer-heading">기록 내보내기</h2><p id="export-summary">상담 내용과 명함·명찰 사진을 함께 담습니다.</p><p>검색과 관계없이 선택한 날짜의 모든 기록을 포함합니다. 진행 중인 상담도 종료 시각 없이 포함되며, 분석 PC에서 시각 확인 후 분석할 수 있습니다.</p><button id="export-date" class="button button-primary wide" type="button" disabled>선택 날짜 ZIP 다운로드</button><div class="secondary-actions"><button id="export-all" class="text-button" type="button" disabled>모든 날짜 ZIP 백업</button><label id="import-label" class="text-button import-label" for="import-file" role="button" tabindex="0">기록 ZIP 가져오기<input id="import-file" type="file" accept=".zip,application/zip" hidden disabled></label></div><p class="transfer-footnote">같은 팀이라도 각 기기에서 따로 내보내세요. 다운로드 후에도 기록과 사진은 기기에 남습니다. 파일이 저장된 것을 확인한 뒤 분석 PC의 ‘현장 기록 가져오기’에서 여세요.</p></section>
     </div>
-    <footer><span>TiSC · 현장 상담 기록</span><p>이 브라우저의 기록만 표시합니다. 브라우저 데이터 삭제 전 기록을 내보내세요.</p></footer>
+    <footer><span>TiSC · 현장 상담 기록</span><p>쿠키·사이트 데이터를 지우면 기록도 삭제됩니다. 모든 날짜 ZIP 백업을 별도로 보관하세요.</p></footer>
   </main>
   <dialog id="image-dialog"><div class="dialog-top"><strong id="image-name">명함 확인</strong><button id="close-image" class="button button-small button-outline" type="button">닫기</button></div><img id="large-image" alt="첨부한 명함 확대 보기"></dialog>
+  <dialog id="delete-dialog" role="alertdialog" aria-labelledby="delete-heading" aria-describedby="delete-name delete-counts delete-warning"><h2 id="delete-heading">이 상담을 삭제할까요?</h2><p id="delete-name"></p><p id="delete-counts"></p><p id="delete-warning">이 브라우저의 상담과 연결된 사진을 함께 삭제합니다. 앱에서 되돌릴 수 없으며, 미리 내보낸 ZIP이 있어야 다시 가져올 수 있습니다.</p><p id="delete-error" class="error-box" role="alert" hidden></p><div class="delete-dialog-actions"><button id="delete-cancel" class="button button-outline" type="button" autofocus>취소</button><button id="delete-confirm" class="button button-primary" type="button" disabled>상담과 사진 삭제</button></div></dialog>
 </body>
 </html>

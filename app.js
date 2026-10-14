@@ -1,5 +1,5 @@
 import { createBundle, readBundle, validateRecord } from './archive.js';
-import { openStorage, getRecords, getCards, saveRecord, saveCard, deleteCard, importRecords } from './storage.js';
+import { openStorage, getRecords, getCards, saveRecord, saveCard, deleteCard, deleteRecords, importRecords } from './storage.js';
 
 const $ = id => document.getElementById(id);
 const records = new Map();
@@ -15,6 +15,7 @@ let saving = null;
 let saveTimer;
 let saveError = null;
 let dialogUrl = null;
+let pendingDelete = null;
 let defaultTeam = '1조';
 let defaultVisit = 'booth';
 try {
@@ -83,6 +84,9 @@ function updateStatus() {
 function syncControls() {
   const locked = !ready || busy;
   for (const id of ['team', 'visit-type', 'company', 'memo', 'manual-start', 'manual-end', 'card-file', 'gallery-file', 'toggle-times', 'save-times', 'end-record', 'next-record', 'new-record', 'add-consultation', 'show-records', 'show-editor', 'show-transfer', 'retry-save', 'import-file']) $(id).disabled = locked;
+  $('delete-record').disabled = locked || !current();
+  $('delete-confirm').disabled = locked || !pendingDelete;
+  $('delete-cancel').disabled = busy;
   $('start-record').disabled = locked;
   $('export-date').disabled = locked || !records.size;
   $('export-all').disabled = locked || !records.size;
@@ -372,6 +376,46 @@ $('new-record').addEventListener('click', () => {
 $('add-consultation').addEventListener('click', startConsultation);
 $('next-record').addEventListener('click', prepareNew);
 $('retry-save').addEventListener('click', () => action(async () => { message('입력한 내용을 기기에 저장했습니다.'); }));
+$('delete-record').addEventListener('click', () => {
+  const record = current();
+  if (!record || busy || !ready) return;
+  if (!$('time-editor').hidden && ($('manual-start').value !== kstInput(record.startAt) || $('manual-end').value !== kstInput(record.endAt))) {
+    message('수정 중인 상담 시각을 먼저 적용하거나 시각 수정을 닫은 뒤 삭제해 주세요.', 'error');
+    $('save-times').focus();
+    return;
+  }
+  action(async () => {
+    const saved = current();
+    pendingDelete = { id: saved.id, updatedAt: persistedRevision.get(saved.id) };
+    $('delete-name').textContent = `${saved.company || '회사명 미입력'} · ${saved.team || '조 미지정'} · ${kstTime(saved.startAt, true)}`;
+    $('delete-counts').textContent = `상담 기록 1건 · 명함·명찰 사진 ${[...cards.values()].filter(card => card.recordId === saved.id).length}장${saved.endAt === null ? ' · 진행 중인 상담' : ''}`;
+    $('delete-error').hidden = true;
+    $('delete-dialog').showModal();
+  }).then(() => { if ($('delete-dialog').open) $('delete-cancel').focus(); });
+});
+$('delete-cancel').addEventListener('click', () => { if (!busy) $('delete-dialog').close(); });
+$('delete-dialog').addEventListener('cancel', event => { if (busy) event.preventDefault(); });
+$('delete-dialog').addEventListener('close', () => { pendingDelete = null; syncControls(); });
+$('delete-confirm').addEventListener('click', async () => {
+  if (!pendingDelete) return;
+  await action(async () => {
+    const target = pendingDelete;
+    await deleteRecords([target]);
+    records.delete(target.id);
+    persistedRevision.delete(target.id);
+    dirty.delete(target.id);
+    for (const [id, card] of cards) if (card.recordId === target.id) cards.delete(id);
+    selectedId = [...records.values()].sort((a, b) => Number(a.endAt !== null) - Number(b.endAt !== null) || b.startAt.localeCompare(a.startAt))[0]?.id || null;
+    $('delete-dialog').close();
+    renderSelected();
+    setView('records');
+    message('상담 1건과 연결된 명함·명찰 사진을 이 브라우저에서 삭제했습니다. 내려받은 ZIP 파일은 그대로 남습니다.');
+  });
+  if ($('delete-dialog').open) {
+    $('delete-error').textContent = $('message').textContent;
+    $('delete-error').hidden = false;
+  } else (document.querySelector('.record-item.selected') || $('new-record')).focus();
+});
 $('toggle-times').addEventListener('click', () => {
   const visible = $('time-editor').hidden;
   $('time-editor').hidden = !visible;

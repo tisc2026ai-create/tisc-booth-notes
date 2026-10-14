@@ -120,6 +120,7 @@ main{max-width:1280px;margin:auto;padding:28px 32px 0}
 .field-help{margin:8px 0 0;color:var(--muted);font-size:12px;line-height:1.8}
 .editor-actions{display:flex;flex-direction:column;gap:8px;margin-top:24px}
 .editor-footnote{margin:10px 0 0;color:var(--muted);text-align:center;font-size:12px}
+.record-delete-actions{text-align:right;margin-top:16px}
 .message,.error-box{margin:0 0 24px;padding:14px 18px;border:0;border-radius:8px;background:var(--fill);color:var(--ink);font-size:14px;overflow-wrap:anywhere}
 .message.error,.error-box{font-weight:600;background:#eaeae9}
 footer{display:flex;align-items:center;justify-content:space-between;gap:24px;padding:32px 0;color:var(--muted);font-size:12px}
@@ -130,6 +131,7 @@ dialog::backdrop{background:#0009}
 .dialog-top{display:flex;align-items:center;justify-content:space-between;gap:24px;margin-bottom:16px}
 .dialog-top strong{font-size:15px;overflow-wrap:anywhere}
 dialog img{display:block;max-width:100%;max-height:75vh;object-fit:contain}
+#delete-dialog{width:calc(100vw - 40px);max-width:480px}#delete-dialog p{font-size:13px;margin:16px 0;overflow-wrap:anywhere}.delete-dialog-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:10px;margin-top:24px}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
 @media(max-width:900px){.header-right{flex-direction:column;align-items:flex-end;gap:4px}.offline-status{white-space:normal}.workspace{gap:32px}.record-context{grid-template-columns:1fr 1fr}.list-tools{flex-wrap:wrap}.date-wrap{width:100%}}
 @media(max-width:640px){

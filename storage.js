@@ -161,6 +161,39 @@ export async function deleteCard(record, cardId, expectedUpdatedAt = null) {
   await writeRecord(record, null, cardId, expectedUpdatedAt);
 }
 
+export async function deleteRecords(values) {
+  if (!Array.isArray(values) || !values.length || values.length > 5000) throw new Error('삭제할 상담 목록이 올바르지 않습니다.');
+  const targets = new Map();
+  for (const value of values) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || typeof value.id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.id)
+        || typeof value.updatedAt !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value.updatedAt)
+        || !Number.isFinite(Date.parse(value.updatedAt)) || new Date(value.updatedAt).toISOString() !== value.updatedAt) {
+      throw new Error('삭제할 상담 ID 또는 수정 시각이 올바르지 않습니다.');
+    }
+    const id = value.id.toLowerCase();
+    if (targets.has(id)) throw new Error('삭제할 상담 ID가 중복되었습니다.');
+    targets.set(id, value.updatedAt);
+  }
+  return transaction(['records', 'cards'], 'readwrite', (tx, receive) => {
+    const records = tx.objectStore('records');
+    const cards = tx.objectStore('cards');
+    let remaining = targets.size;
+    for (const [id, updatedAt] of targets) {
+      receive(records.get(id), existing => {
+        if (!existing || existing.updatedAt !== updatedAt) throw new Error('다른 화면에서 이 상담을 수정하거나 삭제했습니다. 아무 상담도 삭제하지 않았습니다. 기록을 다시 불러와 주세요.');
+        if (--remaining) return;
+        for (const targetId of targets.keys()) {
+          records.delete(targetId);
+          receive(cards.index('recordId').getAllKeys(targetId), ids => {
+            for (const cardId of ids) cards.delete(cardId);
+          });
+        }
+      });
+    }
+  });
+}
+
 export async function importRecords(bundle) {
   if (!bundle || !Array.isArray(bundle.records) || !Array.isArray(bundle.cards) || bundle.records.length > 5000 || bundle.cards.length > 4999) {
     throw new Error('가져올 상담 목록과 명함 목록이 올바르지 않습니다.');
