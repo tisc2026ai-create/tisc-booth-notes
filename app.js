@@ -1,10 +1,16 @@
 import { createBundle, readBundle, validateRecord } from './archive.js';
-import { openStorage, getRecords, getCards, getSnapshot, saveRecord, saveCard, deleteCard, deleteRecords, importRecords } from './storage.js';
+import { openStorage, getSnapshot, saveRecord, saveCard, deleteCard, deleteRecords, saveRecording, deleteRecording, importRecords } from './storage.js';
 import {FieldSync, backupConfig} from './field-sync.js';
+import {MAX_RECORDING_BYTES, RECORDING_EXTENSIONS, normalizeRecording, recordingMetadata} from './assets.js';
 
 const $ = id => document.getElementById(id);
 const records = new Map();
 const cards = new Map();
+const recordings = new Map();
+const recordSelection = new Set();
+let visibleRecordIds = [];
+let pendingRecording = null;
+let recordingUrl = null;
 const dirty = new Set();
 const persistedRevision = new Map();
 const thumbnailUrls = [];
@@ -48,6 +54,10 @@ function revision(record) {
   return new Date(Math.max(Date.now(), Date.parse(record.updatedAt) + 1)).toISOString();
 }
 function current() { return records.get(selectedId); }
+function isVisit(record) { return record?.visitType === 'visit'; }
+function isActive(record) { return record && !isVisit(record) && record.endAt === null; }
+function recordOrder(a, b) { return Number(isActive(b)) - Number(isActive(a)) || b.startAt.localeCompare(a.startAt) || a.id.localeCompare(b.id); }
+function fileSize(size) { return size >= 1024 ** 3 ? `${(size / 1024 ** 3).toFixed(2)}GiB` : `${(size / 1024 ** 2).toFixed(1)}MiB`; }
 function setView(view) {
   document.body.dataset.view = view;
   for (const name of ['records', 'editor', 'transfer']) {
@@ -80,19 +90,31 @@ function updateStatus() {
 }
 function syncControls() {
   const locked = !ready || busy;
-  for (const id of ['company', 'memo', 'manual-start', 'manual-end', 'card-file', 'gallery-file', 'photo-kind', 'photo-caption', 'toggle-times', 'save-times', 'end-record', 'next-record', 'new-record', 'add-consultation', 'show-records', 'show-editor', 'show-transfer', 'retry-save', 'import-file']) $(id).disabled = locked;
+  for (const id of ['company', 'memo', 'manual-start', 'manual-end', 'card-file', 'gallery-file', 'photo-kind', 'photo-caption', 'toggle-times', 'save-times', 'end-record', 'next-record', 'new-record', 'add-consultation', 'show-records', 'show-editor', 'show-transfer', 'retry-save', 'import-file', 'visit-type', 'cancel-recording']) $(id).disabled = locked;
+  $('recording-file').disabled = locked || !isVisit(current()) || Boolean(current()?.recordings?.length);
+  $('save-recording').disabled = locked || !isVisit(current()) || !pendingRecording || pendingRecording.recordId !== selectedId;
   $('delete-record').disabled = locked || !current();
   $('delete-confirm').disabled = locked || !pendingDelete;
   $('delete-cancel').disabled = busy;
   $('start-record').disabled = locked;
   $('export-date').disabled = locked || !records.size;
   $('export-all').disabled = locked || !records.size;
-  for (const button of document.querySelectorAll('.card-remove, .record-item, .other-session')) button.disabled = locked;
+  for (const button of document.querySelectorAll('.card-remove, .photo-details button, .photo-details select, .photo-details textarea, .record-item, .other-session, .recording-remove')) button.disabled = locked;
   for (const id of ['card-upload', 'gallery-upload', 'import-label']) {
     $(id).setAttribute('aria-disabled', String(locked));
     $(id).tabIndex = locked ? -1 : 0;
   }
   updateStatus();
+  syncSelectionControls();
+}
+function syncSelectionControls() {
+  const locked = !ready || busy;
+  $('record-selection-count').textContent = `${recordSelection.size}건 선택`;
+  $('select-visible-records').disabled = locked || !visibleRecordIds.length;
+  $('select-visible-records').checked = Boolean(visibleRecordIds.length) && visibleRecordIds.every(id => recordSelection.has(id));
+  $('select-visible-records').indeterminate = recordSelection.size > 0 && !$('select-visible-records').checked;
+  for (const id of ['clear-record-selection', 'delete-selected-records']) $(id).disabled = locked || !recordSelection.size;
+  for (const checkbox of document.querySelectorAll('.record-select')) checkbox.disabled = locked;
 }
 
 async function flushPending() {
@@ -155,10 +177,10 @@ async function action(task, allowDraftExport = false) {
 }
 
 export function overlappingRecords(selected, candidates) {
-  if (!selected) return [];
+  if (!selected || isVisit(selected)) return [];
   const start = Date.parse(selected.startAt);
   const end = selected.endAt === null ? Infinity : Date.parse(selected.endAt);
-  return [...candidates].filter(record => record.id !== selected.id
+  return [...candidates].filter(record => record.id !== selected.id && !isVisit(record)
     && Math.max(start, Date.parse(record.startAt)) < Math.min(end, record.endAt === null ? Infinity : Date.parse(record.endAt)));
 }
 function renderOverlap() {
@@ -173,17 +195,21 @@ function renderList() {
   container.replaceChildren();
   const query = $('search').value.trim().toLocaleLowerCase('ko-KR');
   const day = $('filter-date').value;
-  const all = [...records.values()].sort((a, b) => Number(a.endAt !== null) - Number(b.endAt !== null) || b.startAt.localeCompare(a.startAt));
+  const all = [...records.values()].sort(recordOrder);
   const dated = all.filter(record => !day || kstDate(record.startAt) === day);
-  const visible = dated.filter(record => !query || `${record.company} ${record.memo}`.toLocaleLowerCase('ko-KR').includes(query));
+  const visible = dated.filter(record => (!$('visit-filter').value || (isVisit(record) ? 'visit' : 'booth') === $('visit-filter').value) && (!query || `${record.company} ${record.memo}`.toLocaleLowerCase('ko-KR').includes(query)));
+  visibleRecordIds = visible.map(record => record.id);
+  const visibleIds = new Set(visibleRecordIds);
+  for (const id of recordSelection) if (!visibleIds.has(id)) recordSelection.delete(id);
+  syncSelectionControls();
   $('record-count').textContent = visible.length;
-  const activeCount = all.filter(record => record.endAt === null).length;
+  const activeCount = all.filter(isActive).length;
   $('active-count').textContent = `진행 중 ${activeCount}건`;
-  $('new-record').textContent = activeCount ? '+ 다른 상담 추가' : '+ 새 상담';
-  $('export-summary').textContent = `${day || '모든 날짜'} · 상담 ${dated.length}건 · 진행 중 ${dated.filter(record => record.endAt === null).length}건 포함 · 사진 ${dated.reduce((count, record) => count + record.cards.length, 0)}장`;
+  $('new-record').textContent = $('visit-type').value === 'visit' ? '+ 방문 기록 추가' : activeCount ? '+ 다른 상담 추가' : '+ 새 상담';
+  $('export-summary').textContent = `${day || '모든 날짜'} · 기록 ${dated.length}건 · 진행 중 ${dated.filter(isActive).length}건 포함 · 사진 ${dated.reduce((count, record) => count + record.cards.length, 0)}장 · 녹음 ${dated.reduce((count, record) => count + (record.recordings?.length || 0), 0)}개`;
   $('active-sessions').replaceChildren();
   if (current()) {
-    for (const record of all.filter(record => record.id !== selectedId && record.endAt === null)) {
+    for (const record of all.filter(record => record.id !== selectedId && isActive(record))) {
       const button = node('button', 'other-session', `${record.company || '회사명 미입력'} · ${kstTime(record.startAt, true)}부터 · 기록 전환`);
       button.type = 'button';
       button.dataset.id = record.id;
@@ -202,6 +228,10 @@ function renderList() {
     return;
   }
   for (const record of visible) {
+    const entry = node('div', 'record-list-entry'), checkbox = node('input', 'record-select');
+    checkbox.type = 'checkbox'; checkbox.dataset.recordId = record.id; checkbox.checked = recordSelection.has(record.id); checkbox.disabled = !ready || busy;
+    checkbox.setAttribute('aria-label', `${record.company || '회사명 미입력'} 삭제 대상으로 선택`);
+    checkbox.addEventListener('change', () => { if (checkbox.checked) recordSelection.add(record.id); else recordSelection.delete(record.id); syncSelectionControls(); });
     const button = node('button', `record-item${record.id === selectedId ? ' selected' : ''}`);
     button.type = 'button';
     button.dataset.id = record.id;
@@ -209,11 +239,11 @@ function renderList() {
     button.setAttribute('aria-pressed', String(record.id === selectedId));
     const row = node('div', 'record-row');
     row.append(node('span', 'record-company', record.company || '회사명 미입력'));
-    row.append(node('span', `record-state${record.endAt === null ? ' active' : ''}`, dirty.has(record.id) ? '저장 대기' : record.endAt === null ? '진행 중' : '기록 완료'));
-    const time = `${!day ? `${kstDate(record.startAt)} · ` : ''}${kstTime(record.startAt)} — ${record.endAt ? kstTime(record.endAt) : '진행 중'} · 사진 ${record.cards.length}장`;
-    button.append(row, node('div', 'record-time', time), node('div', 'record-memo', `${record.visitType === 'visit' ? '이전 기록' : '우리 부스 상담'}${record.memo ? ` · ${record.memo.replace(/\s+/g, ' ')}` : ''}`));
+    row.append(node('span', `record-state${isActive(record) ? ' active' : ''}`, dirty.has(record.id) ? '저장 대기' : isActive(record) ? '진행 중' : '기록 완료'));
+    const time = `${isVisit(record) ? `방문 기록 · 등록일 ${kstDate(record.createdAt)}` : `${!day ? `${kstDate(record.startAt)} · ` : ''}${kstTime(record.startAt)} — ${record.endAt ? kstTime(record.endAt) : '진행 중'}`} · 사진 ${record.cards.length}장 · 녹음 ${record.recordings?.length || 0}개`;
+    button.append(row, node('div', 'record-time', time), node('div', 'record-memo', `${isVisit(record) ? '타 부스 방문' : '우리 부스 상담'}${record.memo ? ` · ${record.memo.replace(/\s+/g, ' ')}` : ''}`));
     button.addEventListener('click', () => action(async () => { selectedId = record.id; renderSelected(); setView('editor'); }));
-    container.append(button);
+    entry.append(checkbox, button); container.append(entry);
   }
 }
 function renderCards() {
@@ -283,61 +313,140 @@ function renderCards() {
 }
 function updateDuration() {
   const record = current();
-  if (!record) return;
+  if (!record || isVisit(record)) return;
   $('duration').textContent = duration(record);
   $('start-label').textContent = kstTime(record.startAt, true);
   $('end-label').textContent = record.endAt ? kstTime(record.endAt, true) : '진행 중';
 }
 function renderSelected() {
   const record = current();
+  if (pendingRecording?.recordId !== selectedId) clearPendingRecording();
   $('start-panel').hidden = Boolean(record);
   $('record-form').hidden = !record;
   $('time-editor').hidden = true;
   $('toggle-times').setAttribute('aria-expanded', 'false');
   $('editor-heading').textContent = record ? record.company || '회사명 미입력' : '새 상담';
+  $('session-banner').hidden = $('time-summary').hidden = isVisit(record);
+  $('visit-record-note').hidden = !isVisit(record);
   if (record) {
+    $('visit-type').value = isVisit(record) ? 'visit' : 'booth';
     $('company').value = record.company;
     $('memo').value = record.memo;
     $('memo-count').textContent = `${record.memo.length.toLocaleString('ko-KR')} / 5,000`;
     $('session-state').textContent = record.endAt ? '상담 기록 저장됨' : '상담 진행 중';
     $('session-banner').classList.toggle('ended', Boolean(record.endAt));
-    $('end-record').hidden = Boolean(record.endAt);
-    $('next-record').hidden = !record.endAt;
-    $('add-consultation').hidden = Boolean(record.endAt);
-    $('next-record').textContent = [...records.values()].some(other => other.id !== record.id && other.endAt === null) ? '진행 중 상담으로 돌아가기' : '다음 상담 준비';
+    $('end-record').hidden = !isActive(record);
+    $('next-record').hidden = !record.endAt && !isVisit(record);
+    $('add-consultation').hidden = !isActive(record);
+    $('next-record').textContent = isVisit(record) ? '다음 방문 기록 준비' : [...records.values()].some(other => other.id !== record.id && isActive(other)) ? '진행 중 상담으로 돌아가기' : '다음 상담 준비';
     $('manual-start').value = kstInput(record.startAt);
     $('manual-end').value = kstInput(record.endAt);
     updateDuration();
   }
+  $('photo-kind').value = isVisit(record) ? 'booth' : 'card';
+  updateRecordType();
   renderCards();
+  renderRecordings();
   renderList();
   syncControls();
 }
+function updateRecordType() {
+  const visiting = $('visit-type').value === 'visit';
+  $('start-heading').textContent = visiting ? '회사명과 방문 내용을 남겨 주세요.' : '대화가 시작될 때 시각을 기록하세요.';
+  $('start-guidance').textContent = visiting ? '실제 시작·종료 시각을 입력하지 않습니다. 방문 전 녹음을 시작하고 퇴장 후 회사명을 말한 파일을 첨부할 수 있습니다.' : '우리 부스 전체 녹음은 상담 시작·종료 시각으로 구간을 연결합니다. 기기 시계를 녹음기와 맞춰주세요.';
+  $('start-record').textContent = visiting ? '방문 기록 추가' : '상담 시작 · 시간 기록';
+  $('record-type-help').textContent = '새 기록에 적용합니다. 우리 부스는 상담 시간을 기록하고, 타 부스는 시각 없이 방문 내용과 개별 녹음을 남깁니다.';
+  renderList();
+}
+
+function clearPendingRecording() {
+  if (pendingRecording?.url) URL.revokeObjectURL(pendingRecording.url);
+  pendingRecording = null;
+  $('recording-file').value = '';
+  $('recording-preview').replaceChildren();
+  $('cancel-recording').hidden = true;
+}
+function renderRecordings() {
+  if (recordingUrl) URL.revokeObjectURL(recordingUrl);
+  recordingUrl = null; $('recordings').replaceChildren();
+  const record = current(), metadata = record?.recordings?.[0], asset = metadata && recordings.get(metadata.id);
+  document.querySelector('.recording-section').hidden = !isVisit(record);
+  $('recording-help').textContent = `${isVisit(record) ? '방문 전에 시작해 퇴장 후 회사명과 관찰을 말한 개별 녹음을 첨부하세요.' : '우리 부스 하루 전체 녹음은 PC에서 별도로 등록하세요. 여기에는 이 상담의 개별 파일만 첨부합니다.'} 파일당 최대 2GiB · M4A/MP4, MP3, WAV, FLAC, OGG, WebM. 원본을 보관하며 이 페이지에서 직접 녹음하지 않습니다. 수동 ZIP은 합계 256MiB 이내이며 큰 파일은 PC 자동 백업을 사용하세요.`;
+  if (metadata) {
+    const item = node('div', 'recording-item'); item.append(node('strong', '', metadata.name), node('p', 'field-help', `${fileSize(metadata.size)} · 기기에 저장됨 · PC 전송 완료 여부는 상단에서 확인하세요.`));
+    if (asset) { const player = node('audio'); player.controls = true; player.preload = 'metadata'; recordingUrl = URL.createObjectURL(asset.blob); player.src = recordingUrl; item.append(player); }
+    const remove = node('button', 'text-button recording-remove', '첨부 녹음 삭제'); remove.type = 'button';
+    remove.addEventListener('click', () => {
+      if (!confirm(`${metadata.name} 녹음을 이 기록에서 삭제할까요? 원본 파일과 보관한 백업은 유지됩니다.`)) return;
+      action(async () => {
+        const latest = current(), next = {...latest, updatedAt: revision(latest), recordings: []};
+        await deleteRecording(next, metadata.id, persistedRevision.get(next.id) ?? null);
+        records.set(next.id, next); persistedRevision.set(next.id, next.updatedAt); recordings.delete(metadata.id);
+        clearPendingRecording(); renderRecordings(); renderList(); message('첨부 녹음을 기기 기록에서 삭제했습니다.');
+      });
+    });
+    item.append(remove); $('recordings').append(item);
+  }
+  if (!pendingRecording) $('recording-status').textContent = metadata ? '녹음을 변경하려면 기존 첨부를 삭제한 뒤 새 파일을 선택하세요.' : '파일 선택 후 확인하고 저장하세요. 선택만으로 기기나 PC에 저장되지 않습니다.';
+  syncControls();
+}
+$('recording-file').addEventListener('change', () => {
+  const file = $('recording-file').files[0]; if (!file) return;
+  if (pendingRecording?.url) URL.revokeObjectURL(pendingRecording.url);
+  pendingRecording = null; $('recording-preview').replaceChildren(); $('cancel-recording').hidden = false;
+  action(async () => {
+    if (file.size > MAX_RECORDING_BYTES) throw new Error('녹음 파일은 2GiB 이하로 선택해 주세요.');
+    $('recording-status').textContent = '선택한 녹음 형식 확인 중…';
+    const blob = await normalizeRecording(file), player = node('audio');
+    pendingRecording = {recordId: selectedId, file, blob, url: URL.createObjectURL(blob)};
+    player.controls = true; player.preload = 'metadata'; player.src = pendingRecording.url;
+    $('recording-preview').append(node('p', '', `${file.name} · ${fileSize(blob.size)} · 아직 저장하지 않음`), player);
+    $('recording-status').textContent = '선택 파일을 확인한 뒤 저장하세요. 저장 후 PC 자동 전송을 기다립니다.';
+  });
+});
+$('cancel-recording').addEventListener('click', () => { clearPendingRecording(); renderRecordings(); });
+$('save-recording').addEventListener('click', () => action(async () => {
+  const pending = pendingRecording, record = current();
+  if (!pending || pending.recordId !== record?.id) return;
+  const id = crypto.randomUUID(), metadata = recordingMetadata({id, name: pending.file.name, type: pending.blob.type, size: pending.blob.size, path: `recordings/${id}.${RECORDING_EXTENSIONS[pending.blob.type]}`});
+  const next = {...record, updatedAt: revision(record), recordings: [metadata]};
+  const asset = {...metadata, recordId: record.id, blob: pending.blob};
+  try {
+    await saveRecording(next, asset, persistedRevision.get(record.id) ?? null,
+      (done, total) => { $('recording-status').textContent = `녹음 확인·기기 저장 중 · ${fileSize(done)} / ${fileSize(total)}`; });
+  } catch (error) { $('recording-status').textContent = '기기 저장 실패 · 선택 파일을 유지했습니다. 다시 저장해 주세요.'; throw error; }
+  records.set(next.id, next); persistedRevision.set(next.id, next.updatedAt); recordings.set(id, asset);
+  clearPendingRecording(); renderRecordings(); renderList(); message('녹음을 기기에 저장했습니다. PC 전송 완료 여부는 상단 상태에서 확인하세요.');
+}));
 
 $('filter-date').value = kstDate();
 setView('records');
 for (const view of ['records', 'editor', 'transfer']) {
   $(`show-${view}`).addEventListener('click', () => action(async () => { setView(view); }));
 }
-$('search').addEventListener('input', renderList);
-$('filter-date').addEventListener('change', renderList);
-$('all-dates').addEventListener('click', () => { $('filter-date').value = ''; renderList(); });
+for (const [id, event] of [['search','input'], ['filter-date','change'], ['visit-filter','change']]) $(id).addEventListener(event, () => { recordSelection.clear(); renderList(); });
+$('all-dates').addEventListener('click', () => { $('filter-date').value = ''; recordSelection.clear(); renderList(); });
+$('visit-type').addEventListener('change', updateRecordType);
+$('select-visible-records').addEventListener('change', () => { for (const id of visibleRecordIds) { if ($('select-visible-records').checked) recordSelection.add(id); else recordSelection.delete(id); } renderList(); });
+$('clear-record-selection').addEventListener('click', () => { recordSelection.clear(); renderList(); });
 $('record-form').addEventListener('submit', event => event.preventDefault());
 $('company').addEventListener('input', () => { edit({ company: $('company').value }); $('editor-heading').textContent = $('company').value || '회사명 미입력'; });
 $('memo').addEventListener('input', () => edit({ memo: $('memo').value }));
 function startConsultation() {
   const clickedAt = new Date().toISOString();
+  const visiting = $('visit-type').value === 'visit';
   action(async () => {
-    const record = { id: crypto.randomUUID(), createdAt: clickedAt, updatedAt: clickedAt, startAt: clickedAt, endAt: null, company: '', memo: '', team: '', visitType: 'booth', cards: [] };
+    const record = { id: crypto.randomUUID(), createdAt: clickedAt, updatedAt: clickedAt, startAt: clickedAt, endAt: null, company: '', memo: '', team: '', visitType: visiting ? 'visit' : 'booth', cards: [], ...(visiting ? {timeBasis:'registered'} : {}) };
     await saveRecord(record, null);
     persistedRevision.set(record.id, record.updatedAt);
     records.set(record.id, record);
     selectedId = record.id;
     $('filter-date').value = kstDate(record.startAt);
     $('search').value = '';
+    $('visit-filter').value = ''; recordSelection.clear();
     renderSelected();
     setView('editor');
-    message('상담 시작 시각을 기록했습니다. 녹음은 별도 녹음기에서 진행해 주세요.');
+    message(visiting ? '방문 기록을 추가했습니다. 실제 시각 없이 회사명·메모·사진·녹음을 남겨 주세요.' : '상담 시작 시각을 기록했습니다. 전체 녹음은 별도 녹음기에서 진행해 주세요.');
     setTimeout(() => $('company').focus(), 0);
   });
 }
@@ -355,7 +464,7 @@ $('end-record').addEventListener('click', () => {
 });
 function prepareNew() {
   action(async () => {
-    const active = [...records.values()].filter(record => record.endAt === null).sort((a, b) => b.startAt.localeCompare(a.startAt))[0];
+    const active = $('visit-type').value === 'visit' ? null : [...records.values()].filter(isActive).sort(recordOrder)[0];
     if (active) {
       selectedId = active.id;
       renderSelected();
@@ -370,47 +479,48 @@ function prepareNew() {
   });
 }
 $('new-record').addEventListener('click', () => {
-  if ([...records.values()].some(record => record.endAt === null)) startConsultation();
+  if ($('visit-type').value === 'visit' || [...records.values()].some(isActive)) startConsultation();
   else prepareNew();
 });
 $('add-consultation').addEventListener('click', startConsultation);
 $('next-record').addEventListener('click', prepareNew);
 $('retry-save').addEventListener('click', () => action(async () => { message('입력한 내용을 기기에 저장했습니다.'); }));
-$('delete-record').addEventListener('click', () => {
+function openDeletion(ids) {
   const record = current();
-  if (!record || busy || !ready) return;
-  if (!$('time-editor').hidden && ($('manual-start').value !== kstInput(record.startAt) || $('manual-end').value !== kstInput(record.endAt))) {
+  if (!ids.length || busy || !ready) return;
+  if (record && ids.includes(record.id) && !$('time-editor').hidden && ($('manual-start').value !== kstInput(record.startAt) || $('manual-end').value !== kstInput(record.endAt))) {
     message('수정 중인 상담 시각을 먼저 적용하거나 시각 수정을 닫은 뒤 삭제해 주세요.', 'error');
     $('save-times').focus();
     return;
   }
   action(async () => {
-    const saved = current();
-    pendingDelete = { id: saved.id, updatedAt: persistedRevision.get(saved.id) };
-    $('delete-name').textContent = `${saved.company || '회사명 미입력'} · ${kstTime(saved.startAt, true)}`;
-    $('delete-counts').textContent = `상담 기록 1건 · 첨부 사진 ${[...cards.values()].filter(card => card.recordId === saved.id).length}장${saved.endAt === null ? ' · 진행 중인 상담' : ''}`;
+    const targets = ids.map(id => records.get(id)).filter(Boolean).sort(recordOrder), selected = new Set(targets.map(item => item.id));
+    pendingDelete = targets.map(item => ({id:item.id, updatedAt:persistedRevision.get(item.id)}));
+    $('delete-name').textContent = targets.map(item => `${item.company || '회사명 미입력'} · ${isVisit(item) ? '타 부스 방문' : kstTime(item.startAt, true)}`).join('\n');
+    $('delete-counts').textContent = `상담 기록 ${targets.length}건 · 첨부 사진 ${[...cards.values()].filter(card => selected.has(card.recordId)).length}장 · 녹음 ${[...recordings.values()].filter(asset => selected.has(asset.recordId)).length}개 · 진행 중 ${targets.filter(isActive).length}건`;
     $('delete-error').hidden = true;
     $('delete-dialog').showModal();
   }).then(() => { if ($('delete-dialog').open) $('delete-cancel').focus(); });
-});
+}
+$('delete-record').addEventListener('click', () => { if (current()) openDeletion([selectedId]); });
+$('delete-selected-records').addEventListener('click', () => openDeletion([...recordSelection]));
 $('delete-cancel').addEventListener('click', () => { if (!busy) $('delete-dialog').close(); });
 $('delete-dialog').addEventListener('cancel', event => { if (busy) event.preventDefault(); });
 $('delete-dialog').addEventListener('close', () => { if (!$('delete-dialog').open) pendingDelete = null; syncControls(); });
 $('delete-confirm').addEventListener('click', async () => {
   if (!pendingDelete) return;
   await action(async () => {
-    const target = pendingDelete;
-    await deleteRecords([target]);
-    records.delete(target.id);
+    const targets = pendingDelete, ids = new Set(targets.map(target => target.id));
+    await deleteRecords(targets);
+    for (const id of ids) { records.delete(id); persistedRevision.delete(id); dirty.delete(id); recordSelection.delete(id); }
     if (!records.size) pcBackup.noteEmptyDeletion();
-    persistedRevision.delete(target.id);
-    dirty.delete(target.id);
-    for (const [id, card] of cards) if (card.recordId === target.id) cards.delete(id);
-    selectedId = [...records.values()].sort((a, b) => Number(a.endAt !== null) - Number(b.endAt !== null) || b.startAt.localeCompare(a.startAt))[0]?.id || null;
+    for (const [id, card] of cards) if (ids.has(card.recordId)) cards.delete(id);
+    for (const [id, asset] of recordings) if (ids.has(asset.recordId)) recordings.delete(id);
     $('delete-dialog').close();
-    renderSelected();
+    if (ids.has(selectedId)) { selectedId = [...records.values()].sort(recordOrder)[0]?.id || null; renderSelected(); }
+    else renderList();
     setView('records');
-    message('상담 1건과 연결된 명함·명찰 사진을 이 브라우저에서 삭제했습니다. 내려받은 ZIP 파일은 그대로 남습니다.');
+    message(`상담 ${targets.length}건과 연결된 사진·녹음을 이 브라우저에서 삭제했습니다. 보관한 백업 파일은 그대로 남습니다.`);
   });
   if ($('delete-dialog').open) {
     $('delete-error').textContent = $('message').textContent;
@@ -518,11 +628,12 @@ function exportRecords(allDates) {
     const selected = [...records.values()].filter(record => !day || kstDate(record.startAt) === day).sort((a, b) => a.startAt.localeCompare(b.startAt));
     if (!selected.length) throw new Error('내보낼 상담 기록이 없습니다. 날짜를 확인해 주세요.');
     const attached = selected.flatMap(record => record.cards.map(card => cards.get(card.id)));
-    const blob = await createBundle(selected, attached);
+    const attachedAudio = selected.flatMap(record => (record.recordings || []).map(asset => recordings.get(asset.id)));
+    const blob = await createBundle(selected, attached, attachedAudio);
     const stamp = kstInput(new Date().toISOString()).replace(/[:T]/g, '-');
     const filename = `tisc-notes-${day || 'all'}-${stamp}.zip`;
     download(blob, filename);
-    message(`${selected.length}건과 사진 ${attached.length}장의 다운로드를 요청했습니다.${dirty.size ? ' 기기 저장에 실패한 수정본이 포함되어 있습니다.' : ''} 파일이 실제로 저장되었는지 확인한 뒤 분석 PC나 별도 보관 위치로 옮겨 주세요.`, 'warning');
+    message(`${selected.length}건·사진 ${attached.length}장·녹음 ${attachedAudio.length}개의 다운로드를 요청했습니다.${dirty.size ? ' 기기 저장에 실패한 수정본이 포함되어 있습니다.' : ''} 파일이 실제로 저장되었는지 확인한 뒤 별도로 보관해 주세요.`, 'warning');
   }, true);
 }
 $('export-date').addEventListener('click', () => exportRecords(false));
@@ -532,25 +643,28 @@ $('import-file').addEventListener('change', () => {
   if (!file) return;
   action(async () => {
     const bundle = await readBundle(file);
-    if (!confirm(`상담 ${bundle.records.length}건과 사진 ${bundle.cards.length}장을 가져올까요? 같은 상담은 최신 수정본을 사용하며, 같은 수정 시각의 충돌은 가져오지 않습니다.`)) return;
+    if (!confirm(`상담 ${bundle.records.length}건·사진 ${bundle.cards.length}장·녹음 ${bundle.recordings?.length || 0}개를 가져올까요? 같은 상담은 최신 수정본을 사용하며, 같은 수정 시각의 충돌은 가져오지 않습니다.`)) return;
     const result = await importRecords(bundle);
     await reloadData();
     $('filter-date').value = '';
     $('search').value = '';
+    $('visit-filter').value = ''; recordSelection.clear();
     if (!records.has(selectedId)) selectedId = null;
     renderSelected();
-    const activeCount = [...records.values()].filter(record => record.endAt === null).length;
+    const activeCount = [...records.values()].filter(isActive).length;
     message(`기록 가져오기 완료: 추가 ${result.added}건 · 갱신 ${result.updated}건 · 기존 유지 ${result.skipped}건.${activeCount > 1 ? ' 진행 중인 상담이 여러 건입니다. 각 기록의 종료 시각을 확인해 주세요.' : ''}`);
   }).finally(() => { $('import-file').value = ''; });
 });
 
 async function reloadData() {
-  const [savedRecords, savedCards] = await Promise.all([getRecords(), getCards()]);
+  const {records:savedRecords, cards:savedCards, recordings:savedRecordings = []} = await getSnapshot();
   records.clear();
   cards.clear();
+  recordings.clear();
   persistedRevision.clear();
   savedRecords.forEach(record => { records.set(record.id, record); persistedRevision.set(record.id, record.updatedAt); });
   savedCards.forEach(card => cards.set(card.id, card));
+  savedRecordings.forEach(asset => recordings.set(asset.id, asset));
 }
 window.addEventListener('beforeunload', event => {
   if (dirty.size || saving || busy) { event.preventDefault(); event.returnValue = ''; }
@@ -578,7 +692,7 @@ try {
   await openStorage();
   await reloadData();
   ready = true;
-  const active = [...records.values()].filter(record => record.endAt === null).sort((a, b) => b.startAt.localeCompare(a.startAt));
+  const active = [...records.values()].filter(isActive).sort(recordOrder);
   selectedId = active[0]?.id || null;
   if (selectedId) $('filter-date').value = kstDate(records.get(selectedId).startAt);
   renderSelected();
@@ -618,7 +732,7 @@ $('backup-disconnect').addEventListener('click', () => { pcBackup.disconnect(); 
 $('backup-restore').addEventListener('click', () => action(async () => {
   const bundle = await pcBackup.restore();
   try {
-    if (!confirm(`PC에 보관한 상담 ${bundle.records.length}건과 사진 ${bundle.cards.length}장을 복원할까요? 같은 기록은 최신 수정본을 유지합니다.`)) return;
+    if (!confirm(`PC에 보관한 상담 ${bundle.records.length}건·사진 ${bundle.cards.length}장·녹음 ${bundle.recordings?.length || 0}개를 복원할까요? 같은 기록은 최신 수정본을 유지합니다.`)) return;
     await importRecords(bundle); await reloadData(); selectedId = null; renderSelected();
     pcBackup.acknowledgeRestore(bundle);
     $('backup-message').textContent = 'PC 백업을 이 브라우저에 복원했습니다.';

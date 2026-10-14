@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {backupConfig, FieldSync} from '../field-sync.js';
 import {createBundle, MAX_BUNDLE_BYTES} from '../archive.js';
+import {recordingDigest,AUDIO_CHUNK_BYTES} from '../assets.js';
+import {audioFixture} from './audio-fixtures.mjs';
 
 const config={url:'https://tisc.example.ts.net/',token:'x'.repeat(43),deviceId:'013cf837-4a88-42cd-91d4-9a5afbd58ce9',label:'현장 담당'};
 const now='2026-10-19T01:00:00.000Z';
@@ -31,17 +33,20 @@ function peer(chunkBytes=32){
     assert.equal(options.headers.Authorization,`Bearer ${config.token}`);assert.equal(options.mode,'cors');assert.equal(options.credentials,'omit');assert.equal(options.redirect,'error');
     const parsed=new URL(url),path=parsed.pathname.split('/sync')[1],call={path,method:options.method||'GET',query:parsed.searchParams,bytes:options.body instanceof Blob?options.body.size:0};
     pc.calls.push(call);await pc.before?.(call,options);let response;
-    if(path==='/status')response=json({chunkBytes:pc.chunkBytes,revision:pc.latest?.revision||0,records:pc.latest?.records||[],hashes:pc.latest?.photos||[],photos:JSON.parse(options.body).photos.map(photo=>{const stored=pc.blobs.get(photo.sha256);return {sha256:photo.sha256,offset:stored?.bytes.length||0,complete:stored?.complete||false};})});
+    if(path==='/status'){
+      const body=JSON.parse(options.body),states=values=>(values||[]).map(photo=>{const stored=pc.blobs.get(photo.sha256);return {sha256:photo.sha256,offset:stored?.bytes.length||0,complete:stored?.complete||false};});
+      response=json({schemaVersion:pc.latest?.schemaVersion||2,chunkBytes:pc.chunkBytes,revision:pc.latest?.revision||0,records:pc.latest?.records||[],hashes:pc.latest?.photos||[],recordingHashes:pc.latest?.recordings||[],photos:states(body.photos),recordings:states(body.recordings)});
+    }
     else if(path?.startsWith('/blobs/')&&call.method==='POST'){
       const sha256=path.split('/').at(-1),offset=Number(call.query.get('offset')),size=Number(call.query.get('size')),type=call.query.get('type'),stored=pc.blobs.get(sha256)||{bytes:new Uint8Array(),complete:false,type};
       assert.equal(offset,stored.bytes.length);const incoming=new Uint8Array(await options.body.arrayBuffer()),bytes=new Uint8Array(offset+incoming.length);bytes.set(stored.bytes);bytes.set(incoming,offset);
-      if(bytes.length===size)assert.equal(await hash(bytes),sha256);pc.blobs.set(sha256,{bytes,complete:bytes.length===size,type});response=json({offset:bytes.length,complete:bytes.length===size});
+      if(bytes.length===size)assert.equal(type.startsWith('audio/')?await recordingDigest(new Blob([bytes],{type})):await hash(bytes),sha256);pc.blobs.set(sha256,{bytes,complete:bytes.length===size,type});response=json({offset:bytes.length,complete:bytes.length===size});
     }else if(path==='/manifest'&&call.method==='POST'){
       const value=JSON.parse(options.body);call.manifest=value;
       if(value.expectedRevision!==(pc.latest?.revision||0))response=json({error:'최신 PC 백업을 복원해 주세요.',revision:pc.latest.revision},409);
-      else{for(const photo of value.photos)assert.equal(pc.blobs.get(photo.sha256)?.complete,true);pc.latest=value;response=json({records:value.records.length,photos:value.photos.length,revision:value.revision,savedAt:now});}
+      else{for(const photo of [...value.photos,...(value.recordings||[])])assert.equal(pc.blobs.get(photo.sha256)?.complete,true);pc.latest=value;response=json({records:value.records.length,photos:value.photos.length,...(value.schemaVersion===3?{recordings:value.recordings.length}:{}),revision:value.revision,savedAt:now});}
     }else if(path==='/manifest')response=pc.latest?json(pc.latest):json({error:'없음'},404);
-    else if(path?.startsWith('/blobs/')){const photo=pc.blobs.get(path.split('/').at(-1));response=new Response(photo.bytes,{headers:{'Content-Type':photo.type}});}
+    else if(path?.startsWith('/blobs/')){const photo=pc.blobs.get(path.split('/').at(-1)),offset=Number(call.query.get('offset')||0),length=Number(call.query.get('length')||photo.bytes.length);response=new Response(photo.bytes.slice(offset,offset+length),{headers:{'Content-Type':photo.type}});}
     else if(path===undefined&&pc.legacy)response=new Response(pc.legacy,{headers:{'Content-Type':'application/zip'}});
     else throw new Error('Unexpected synthetic route');
     await pc.after?.(call,options,response);return response;
@@ -82,7 +87,9 @@ for(const failure of ['before','after'])test(`interrupted photos resume at the P
 test('a lost manifest acknowledgement survives reload without resending photos',async t=>{
   environment(t);const snapshot=await fixture(),pc=peer(),{sync}=client(snapshot);let fail=true;
   pc.after=async call=>{if(fail&&call.path==='/manifest'&&call.method==='POST'){fail=false;throw new Error('lost commit reply');}};
-  await sync.send();assert.equal(sync.signature,null);assert.ok(pc.latest);assert.ok(sync.progress.pending);const commitCount=commits(pc).length,byteCount=binaryCalls(pc).length;
+  await sync.send();assert.equal(sync.signature,null);assert.ok(pc.latest);assert.ok(sync.progress.pending);
+  assert.equal(sync.progress.pending.signature,await hash(new TextEncoder().encode(JSON.stringify({records:pc.latest.records,photos:pc.latest.photos}))),'Photo-only pending signatures must stay compatible with the previous client');
+  const commitCount=commits(pc).length,byteCount=binaryCalls(pc).length;
   const reloaded=client(snapshot).sync;await reloaded.send();assert.ok(reloaded.signature);assert.equal(reloaded.progress.revision,pc.latest.revision);assert.equal(commits(pc).length,commitCount);assert.equal(binaryCalls(pc).length,byteCount);
 });
 test('a lost commit acknowledgement cannot report success when its committed photo needs repair',async t=>{
@@ -167,4 +174,31 @@ test('automatic backup exceeds 256MiB without reading complete photos into a ZIP
   globalThis.fetch=async(url,options)=>{const parsed=new URL(url);if(parsed.pathname.endsWith('/status'))return json({chunkBytes:1024*1024,revision:0,records:[],hashes:[],photos:JSON.parse(options.body).photos.map(photo=>({sha256:photo.sha256,offset:0,complete:false}))});
     if(parsed.pathname.includes('/blobs/')){sent+=options.body.size;largest=Math.max(largest,options.body.size);const offset=Number(parsed.searchParams.get('offset'))+options.body.size;return json({offset,complete:offset===size});}manifest=JSON.parse(options.body);return json({revision:manifest.revision,records:1,photos:2,savedAt:now});};
   const {sync}=client(snapshot);await sync.send();assert.ok(sync.signature);assert.ok(sent>MAX_BUNDLE_BYTES);assert.equal(sent,2*size);assert.equal(largest,1024*1024);assert.equal(manifest.photos.length,2);
+});
+
+test('visit audio resumes confirmed chunks, sends memo-only updates without audio bytes and restores by bounded ranges',async t=>{
+  environment(t);const snapshot=await audioFixture(2*AUDIO_CHUNK_BYTES+64),pc=peer(AUDIO_CHUNK_BYTES),{sync}=client(snapshot);let fail=true;
+  pc.after=async call=>{if(fail&&call.bytes){fail=false;throw new Error('Lost audio acknowledgement');}};
+  await sync.send();assert.equal(sync.signature,null);assert.equal(pc.latest,null);assert.equal(pc.blobs.values().next().value.bytes.length,AUDIO_CHUNK_BYTES);
+  const {sync:reloaded}=client(snapshot);await reloaded.send();assert.ok(reloaded.signature);assert.equal(pc.latest.schemaVersion,3);assert.equal(pc.latest.recordings.length,1);
+  const sent=binaryCalls(pc).reduce((sum,call)=>sum+call.bytes,0);snapshot.records[0].memo+=' · 추가 메모';later(snapshot.records[0]);await reloaded.send();
+  assert.equal(binaryCalls(pc).reduce((sum,call)=>sum+call.bytes,0),sent);
+  const restored=await reloaded.restore();assert.deepEqual(restored.records,snapshot.records);assert.equal(restored.recordings[0].hash,snapshot.recordings[0].hash);
+  assert.deepEqual(await restored.recordings[0].blob.arrayBuffer(),await snapshot.recordings[0].blob.arrayBuffer());
+  const downloads=pc.calls.filter(call=>call.path?.startsWith('/blobs/')&&call.method==='GET');assert.equal(downloads.length,3);assert.ok(downloads.every(call=>Number(call.query.get('length'))<=AUDIO_CHUNK_BYTES));
+  reloaded.cancelRestore(restored);snapshot.records=[];snapshot.recordings=[];reloaded.noteEmptyDeletion();await reloaded.send();assert.equal(pc.latest.schemaVersion,3);assert.deepEqual(pc.latest.recordings,[]);
+});
+
+test('corrupted ranged audio restoration leaves the known revision and local records intact',async t=>{
+  environment(t);const snapshot=await audioFixture(AUDIO_CHUNK_BYTES+64),pc=peer(AUDIO_CHUNK_BYTES),{sync}=client(snapshot);await sync.send();const baseline=sync.progress.revision;
+  pc.blobs.values().next().value.bytes[AUDIO_CHUNK_BYTES+20]^=1;
+  await assert.rejects(sync.restore(),/녹음 검증/);assert.equal(sync.progress.revision,baseline);assert.equal(snapshot.recordings.length,1);assert.equal(sync.pendingRestore,null);
+});
+
+test('registered visits without audio use v3 and lost audio-manifest acknowledgements stay recoverable',async t=>{
+  environment(t);const snapshot=await audioFixture(),pc=peer(AUDIO_CHUNK_BYTES),{sync}=client(snapshot);let fail=true;
+  pc.after=async call=>{if(fail&&call.path==='/manifest'&&call.method==='POST'){fail=false;throw new Error('Lost v3 manifest acknowledgement');}};
+  await sync.send();assert.equal(sync.signature,null);const count=commits(pc).length,bytes=binaryCalls(pc).length;
+  const reloaded=client(snapshot).sync;await reloaded.send();assert.ok(reloaded.signature);assert.equal(commits(pc).length,count);assert.equal(binaryCalls(pc).length,bytes);
+  snapshot.records[0].recordings=[];snapshot.recordings=[];later(snapshot.records[0]);await reloaded.send();assert.equal(pc.latest.schemaVersion,3);assert.deepEqual(pc.latest.recordings,[]);assert.equal(pc.latest.records[0].timeBasis,'registered');
 });

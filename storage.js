@@ -1,8 +1,10 @@
 import { validateRecord } from './archive.js';
+import {recordingDigest} from './assets.js';
 
 let database = null;
 let opening = null;
 const metadataKeys = ['id', 'name', 'type', 'size', 'path', 'kind', 'caption'];
+const assetStores = ['cards','recordings'];
 
 function storageError(error) {
   if (error?.name === 'QuotaExceededError') return new Error('기기 저장 공간이 부족합니다. 기록을 내보내 백업한 뒤 공간을 확보해 주세요.');
@@ -14,12 +16,12 @@ export async function openStorage() {
   if (!opening) {
     opening = new Promise((resolve, reject) => {
       if (!globalThis.indexedDB) return reject(new Error('이 브라우저에서는 기기 저장 기능을 사용할 수 없습니다.'));
-      const request = indexedDB.open('tisc-booth-notes', 1);
+      const request = indexedDB.open('tisc-booth-notes', 2);
       let blocked = false;
       request.onupgradeneeded = () => {
         const db = request.result;
-        db.createObjectStore('records', { keyPath: 'id' });
-        db.createObjectStore('cards', { keyPath: 'id' }).createIndex('recordId', 'recordId');
+        if (!db.objectStoreNames.contains('records')) db.createObjectStore('records', {keyPath:'id'});
+        for (const name of assetStores) if (!db.objectStoreNames.contains(name)) db.createObjectStore(name,{keyPath:'id'}).createIndex('recordId','recordId');
       };
       request.onblocked = () => {
         blocked = true;
@@ -78,11 +80,16 @@ export async function getCards() {
   });
 }
 
+export async function getRecordings() {
+  return transaction(['recordings'],'readonly',(tx,receive,result) => receive(tx.objectStore('recordings').getAll(),result));
+}
+
 export async function getSnapshot() {
-  return transaction(['records', 'cards'], 'readonly', (tx, receive, result) => {
+  return transaction(['records', ...assetStores], 'readonly', (tx, receive, result) => {
     const snapshot = {};
     receive(tx.objectStore('records').getAll(), records => { snapshot.records = records; });
     receive(tx.objectStore('cards').getAll(), cards => { snapshot.cards = cards; });
+    receive(tx.objectStore('recordings').getAll(), recordings => { snapshot.recordings = recordings; });
     result(snapshot);
   });
 }
@@ -91,24 +98,26 @@ function sameRecord(left, right) {
   return JSON.stringify(validateRecord(left)) === JSON.stringify(validateRecord(right));
 }
 
-function sameMetadata(left, right) {
-  return metadataKeys.every(key => left[key] === right[key]);
+function sameMetadata(left, right, kind = 'cards') {
+  return (kind === 'cards' ? metadataKeys : ['id','name','type','size','path']).every(key => left[key] === right[key]);
 }
 
-function assertReferences(record, cards) {
-  if (record.cards.length !== cards.size || record.cards.some(card => {
+function assertReferences(record, cards, kind = 'cards') {
+  const references = record[kind] || [];
+  if (references.length !== cards.size || references.some(card => {
     const stored = cards.get(card.id);
-    return !stored || stored.recordId !== record.id || !sameMetadata(card, stored);
+    return !stored || stored.recordId !== record.id || !sameMetadata(card, stored, kind);
   })) throw new Error('상담 기록과 명함 파일의 연결이 일치하지 않습니다. 기록을 다시 불러와 주세요.');
 }
 
-async function prepareCard(record, card) {
-  const reference = record.cards.find(item => item.id === card?.id);
+async function prepareCard(record, card, kind = 'cards', onProgress) {
+  const reference = (record[kind] || []).find(item => item.id === card?.id);
   const blob = card?.blob;
-  if (!reference || card.recordId !== record.id || !sameMetadata(reference, card)
+  if (!reference || card.recordId !== record.id || !sameMetadata(reference, card, kind)
       || !(blob instanceof Blob) || blob.type !== reference.type || blob.size !== reference.size) {
     throw new Error('명함 파일과 상담의 연결 정보, 크기 또는 형식이 올바르지 않습니다.');
   }
+  if (kind === 'recordings') return {...reference,recordId:record.id,blob,hash:await recordingDigest(blob,onProgress)};
   const digest = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
   const hash = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
   return { ...reference, recordId: record.id, blob, hash };
@@ -122,36 +131,46 @@ function assertRevision(record, existing) {
   }
 }
 
-async function writeRecord(value, newCard = null, removedId = null, expectedUpdatedAt = null) {
+async function writeRecord(value, newAsset = null, removedId = null, expectedUpdatedAt = null, kind = 'cards', onProgress) {
   const record = validateRecord(value);
-  const added = newCard ? await prepareCard(record, newCard) : null;
-  return transaction(['records', 'cards'], 'readwrite', (tx, receive) => {
+  const added = newAsset ? await prepareCard(record,newAsset,kind,onProgress) : null;
+  return transaction(['records',...assetStores],'readwrite',(tx,receive) => {
     const records = tx.objectStore('records');
-    const cards = tx.objectStore('cards');
-    receive(records.get(record.id), existing => {
-      if ((existing?.updatedAt ?? null) !== expectedUpdatedAt) {
-        throw new Error('다른 화면에서 이 상담을 수정했습니다. 덮어쓰지 않았습니다. 기록을 다시 불러온 뒤 수정해 주세요.');
-      }
-      assertRevision(record, existing);
-      receive(cards.index('recordId').getAll(record.id), stored => {
-        const linked = new Map(stored.map(card => [card.id, card]));
-        const save = () => {
-          if (removedId && !linked.has(removedId)) throw new Error('이 상담에 연결된 명함이 아닙니다. 삭제하지 않았습니다.');
-          if (removedId) linked.delete(removedId);
-          if (added) linked.set(added.id, added);
-          assertReferences(record, linked);
-          records.put(record);
-          if (added) cards.put(added);
-          if (removedId) cards.delete(removedId);
-        };
+    receive(records.get(record.id),existing => {
+      if ((existing?.updatedAt ?? null) !== expectedUpdatedAt) throw new Error('다른 화면에서 이 상담을 수정했습니다. 덮어쓰지 않았습니다. 기록을 다시 불러온 뒤 수정해 주세요.');
+      assertRevision(record,existing);
+      const linked = {}, removed = [];
+      let pending = assetStores.length;
+      const save = () => {
+        const selected = linked[kind];
+        if (removedId && !selected.has(removedId)) throw new Error('이 기록에 연결된 첨부 파일이 아닙니다. 삭제하지 않았습니다.');
+        if (removedId) selected.delete(removedId);
+        if (added) {
+          if (kind === 'recordings') { for (const id of selected.keys()) if (id !== added.id) removed.push(id); selected.clear(); }
+          selected.set(added.id,added);
+        }
+        for (const name of assetStores) assertReferences(record,linked[name],name);
+        records.put(record);
+        const store = tx.objectStore(kind);
+        for (const id of removed) store.delete(id);
+        if (removedId) store.delete(removedId);
+        if (added) store.put(added);
+      };
+      const ready = () => {
         if (!added) { save(); return; }
-        receive(cards.get(added.id), current => {
-          if (current && current.recordId !== record.id) throw new Error('이미 다른 상담에 연결된 명함 ID입니다. 저장하지 않았습니다.');
-          if (current && existing?.updatedAt === record.updatedAt && current.hash !== added.hash) {
-            throw new Error('같은 수정 시각의 명함 사진 내용이 다릅니다. 덮어쓰지 않았습니다.');
-          }
-          save();
+        receive(tx.objectStore(kind).get(added.id),current => {
+          if (current && current.recordId !== record.id) throw new Error('이미 다른 기록에 연결된 첨부 ID입니다. 저장하지 않았습니다.');
+          if (current && existing?.updatedAt === record.updatedAt && current.hash !== added.hash) throw new Error('같은 수정 시각의 첨부 내용이 다릅니다. 덮어쓰지 않았습니다.');
+          const other = kind === 'cards' ? 'recordings' : 'cards';
+          receive(tx.objectStore(other).get(added.id),collision => {
+            if (collision) throw new Error('사진과 녹음의 ID가 중복되었습니다.');
+            save();
+          });
         });
+      };
+      for (const name of assetStores) receive(tx.objectStore(name).index('recordId').getAll(record.id),stored => {
+        linked[name] = new Map(stored.map(asset => [asset.id,asset]));
+        if (!--pending) ready();
       });
     });
   });
@@ -170,6 +189,15 @@ export async function deleteCard(record, cardId, expectedUpdatedAt = null) {
   await writeRecord(record, null, cardId, expectedUpdatedAt);
 }
 
+export async function saveRecording(record, recording, expectedUpdatedAt = null, onProgress) {
+  await writeRecord(record,recording,null,expectedUpdatedAt,'recordings',onProgress);
+}
+
+export async function deleteRecording(record, id, expectedUpdatedAt = null) {
+  if (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id)) throw new Error('삭제할 녹음 ID가 올바르지 않습니다.');
+  await writeRecord(record,null,id,expectedUpdatedAt,'recordings');
+}
+
 export async function deleteRecords(values) {
   if (!Array.isArray(values) || !values.length || values.length > 5000) throw new Error('삭제할 상담 목록이 올바르지 않습니다.');
   const targets = new Map();
@@ -184,9 +212,8 @@ export async function deleteRecords(values) {
     if (targets.has(id)) throw new Error('삭제할 상담 ID가 중복되었습니다.');
     targets.set(id, value.updatedAt);
   }
-  return transaction(['records', 'cards'], 'readwrite', (tx, receive) => {
+  return transaction(['records', ...assetStores], 'readwrite', (tx, receive) => {
     const records = tx.objectStore('records');
-    const cards = tx.objectStore('cards');
     let remaining = targets.size;
     for (const [id, updatedAt] of targets) {
       receive(records.get(id), existing => {
@@ -194,9 +221,10 @@ export async function deleteRecords(values) {
         if (--remaining) return;
         for (const targetId of targets.keys()) {
           records.delete(targetId);
-          receive(cards.index('recordId').getAllKeys(targetId), ids => {
-            for (const cardId of ids) cards.delete(cardId);
-          });
+          for (const name of assetStores) {
+            const store = tx.objectStore(name);
+            receive(store.index('recordId').getAllKeys(targetId),ids => {for (const id of ids) store.delete(id);});
+          }
         }
       });
     }
@@ -204,65 +232,59 @@ export async function deleteRecords(values) {
 }
 
 export async function importRecords(bundle) {
-  if (!bundle || !Array.isArray(bundle.records) || !Array.isArray(bundle.cards) || bundle.records.length > 5000 || bundle.cards.length > 4999) {
-    throw new Error('가져올 상담 목록과 명함 목록이 올바르지 않습니다.');
-  }
-  const records = bundle.records.map(validateRecord);
-  const byId = new Map(records.map(record => [record.id, record]));
+  if (!bundle || !Array.isArray(bundle.records) || !Array.isArray(bundle.cards) || bundle.records.length > 5000
+      || (bundle.recordings !== undefined && !Array.isArray(bundle.recordings))) throw new Error('가져올 기록과 첨부 목록이 올바르지 않습니다.');
+  const records = bundle.records.map(validateRecord), byId = new Map(records.map(record => [record.id,record]));
   if (byId.size !== records.length) throw new Error('가져올 상담 ID가 중복되었습니다.');
-  const references = new Map();
-  for (const record of records) {
-    for (const card of record.cards) {
-      if (references.has(card.id)) throw new Error('명함이 여러 상담에 중복 연결되었습니다.');
-      references.set(card.id, record.id);
+  const incoming = {cards:bundle.cards,recordings:bundle.recordings || []}, incomingById = {}, ids = new Set();
+  if (incoming.cards.length + incoming.recordings.length > 4999) throw new Error('첨부 파일 목록이 너무 큽니다.');
+  for (const kind of assetStores) {
+    const references = new Map();
+    for (const record of records) for (const asset of record[kind] || []) {
+      if (ids.has(asset.id)) throw new Error('첨부 ID가 중복되었습니다.');
+      ids.add(asset.id); references.set(asset.id,record.id);
     }
+    if (references.size !== incoming[kind].length) throw new Error('기록에 연결된 첨부 파일이 누락되었거나 불필요한 첨부가 있습니다.');
+    const prepared = new Map();
+    // Finish bounded, sequential hashing before opening the one atomic transaction.
+    for (const asset of incoming[kind]) {
+      if (!asset || prepared.has(asset.id) || references.get(asset.id) !== asset.recordId) throw new Error('첨부 ID 또는 기록 연결이 올바르지 않습니다.');
+      prepared.set(asset.id,await prepareCard(byId.get(asset.recordId),asset,kind));
+    }
+    incomingById[kind] = prepared;
   }
-  if (references.size !== bundle.cards.length) throw new Error('상담에 연결된 명함 파일이 누락되었거나 불필요한 명함이 있습니다.');
-  const ids = new Set();
-  for (const card of bundle.cards) {
-    if (!card || ids.has(card.id) || references.get(card.id) !== card.recordId) throw new Error('명함 ID 또는 상담 연결이 올바르지 않습니다.');
-    ids.add(card.id);
-  }
-  // 명함 검증과 해시는 트랜잭션 전에 완료해 비동기 대기 중 일부만 저장되는 일을 막습니다.
-  const incomingCards = [];
-  for (const card of bundle.cards) incomingCards.push(await prepareCard(byId.get(card.recordId), card));
-  const incomingById = new Map(incomingCards.map(card => [card.id, card]));
-  return transaction(['records', 'cards'], 'readwrite', (tx, receive, result) => {
-    const recordStore = tx.objectStore('records');
-    const cardStore = tx.objectStore('cards');
-    receive(recordStore.getAll(), storedRecords => {
-      const storedById = new Map(storedRecords.map(record => [record.id, record]));
-      receive(cardStore.getAll(), storedCards => {
-        const storedCardsById = new Map(storedCards.map(card => [card.id, card]));
-        const counts = { added: 0, updated: 0, skipped: 0 };
-        const changes = [];
-        for (const record of records) {
-          const existing = storedById.get(record.id);
-          for (const card of record.cards) {
-            const current = storedCardsById.get(card.id);
-            if (current && current.recordId !== record.id) throw new Error('다른 상담에 연결된 명함 ID가 포함되어 있습니다. 아무 기록도 가져오지 않았습니다.');
-          }
-          if (existing && record.updatedAt === existing.updatedAt) {
-            if (!sameRecord(record, existing) || record.cards.some(card => storedCardsById.get(card.id)?.hash !== incomingById.get(card.id).hash)) {
-              throw new Error('같은 수정 시각의 서로 다른 상담 또는 명함이 있습니다. 아무 기록도 덮어쓰지 않았습니다.');
-            }
-            counts.skipped++;
-          } else if (existing && record.updatedAt < existing.updatedAt) {
-            counts.skipped++;
-          } else {
-            counts[existing ? 'updated' : 'added']++;
-            changes.push(record);
-          }
+  return transaction(['records',...assetStores],'readwrite',(tx,receive,result) => {
+    const stored = {};
+    let pending = 3;
+    const apply = () => {
+      const storedById = new Map(stored.records.map(record => [record.id,record]));
+      const storedAssets = Object.fromEntries(assetStores.map(kind => [kind,new Map(stored[kind].map(asset => [asset.id,asset]))]));
+      const counts = {added:0,updated:0,skipped:0}, changes = [];
+      for (const record of records) {
+        const existing = storedById.get(record.id);
+        for (const kind of assetStores) for (const asset of record[kind] || []) {
+          const current = storedAssets[kind].get(asset.id), other = kind === 'cards' ? 'recordings' : 'cards';
+          if ((current && current.recordId !== record.id) || storedAssets[other].has(asset.id)) throw new Error('다른 기록에 연결되었거나 중복된 첨부 ID입니다. 아무 기록도 가져오지 않았습니다.');
         }
-        for (const record of changes) {
-          for (const oldCard of storedCards) {
-            if (oldCard.recordId === record.id) cardStore.delete(oldCard.id);
-          }
-          recordStore.put(record);
-          for (const card of record.cards) cardStore.put(incomingById.get(card.id));
+        if (existing && record.updatedAt === existing.updatedAt) {
+          if (!sameRecord(record,existing) || assetStores.some(kind => (record[kind] || []).some(asset => storedAssets[kind].get(asset.id)?.hash !== incomingById[kind].get(asset.id).hash))) throw new Error('같은 수정 시각의 서로 다른 기록 또는 첨부가 있습니다. 아무 기록도 덮어쓰지 않았습니다.');
+          counts.skipped++;
+        } else if (existing && record.updatedAt < existing.updatedAt) counts.skipped++;
+        else {
+          if ((existing?.recordings?.length && record.recordings === undefined) || (existing?.timeBasis !== undefined && record.timeBasis === undefined)) throw new Error('방문·녹음 정보가 없는 기존 형식으로 방문 기록을 덮어쓸 수 없습니다.');
+          counts[existing ? 'updated' : 'added']++;changes.push(record);
         }
-        result(counts);
-      });
-    });
+      }
+      for (const record of changes) {
+        tx.objectStore('records').put(record);
+        for (const kind of assetStores) {
+          const store = tx.objectStore(kind);
+          for (const asset of stored[kind]) if (asset.recordId === record.id) store.delete(asset.id);
+          for (const asset of record[kind] || []) store.put(incomingById[kind].get(asset.id));
+        }
+      }
+      result(counts);
+    };
+    for (const kind of ['records',...assetStores]) receive(tx.objectStore(kind).getAll(),values => {stored[kind] = values;if (!--pending) apply();});
   });
 }

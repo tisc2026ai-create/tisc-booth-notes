@@ -53,7 +53,7 @@ main{max-width:1280px;margin:auto;padding:28px 32px 0}
 .active-count{display:inline-block;margin-left:6px;color:var(--ink);font-weight:600;white-space:nowrap}
 .record-list{min-height:160px;max-height:630px;overflow:auto}
 .record-item{display:block;width:100%;min-height:104px;margin:0 0 8px;padding:18px 16px;border:0;border-radius:8px;background:var(--fill);color:var(--ink);text-align:left}
-.record-item:nth-child(even){background:#fafafa}
+.record-list-entry:nth-child(even) .record-item:not(.selected):not(:hover){background:#fafafa}
 .record-item:hover,.record-item.selected{background:#eaeae9}
 .record-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .record-company{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:16px;font-weight:650}
@@ -113,7 +113,7 @@ main{max-width:1280px;margin:auto;padding:28px 32px 0}
 .card-open img{display:block;width:100%;height:100px;object-fit:contain}
 .card-name{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-top:6px;color:var(--muted);font-size:11px}
 .card-remove{position:absolute;right:2px;top:2px;width:44px;height:44px;padding:0;border:0;border-radius:50%;background:#fff;color:var(--ink);font-size:23px;line-height:1}
-.photo-actions{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.photo-actions{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px}
 .card-upload{display:flex;align-items:center;justify-content:center;gap:9px;min-height:76px;padding:14px 10px;border:0;border-radius:8px;background:var(--fill);color:var(--ink);cursor:pointer;font-size:13px;font-weight:500}
 .card-upload:hover{background:var(--hover)}
 .card-upload svg{width:22px;height:22px;stroke:var(--ink);stroke-width:1.6;fill:none}
@@ -170,6 +170,11 @@ dialog img{display:block;max-width:100%;max-height:75vh;object-fit:contain}
 
 .photo-details{padding:6px;font-size:12px}.photo-details summary{cursor:pointer}.photo-details label{display:block;margin-top:8px}.photo-details select,.photo-details textarea{width:100%;min-width:0}.photo-details button{margin-top:8px}
 
+.record-list-entry{display:grid;grid-template-columns:24px minmax(0,1fr);gap:10px;align-items:center;margin-bottom:8px}.record-list-entry .record-item{margin-bottom:0;min-width:0}.record-select,#select-visible-records{width:20px;height:20px;min-height:20px;padding:0;margin:0;accent-color:var(--ink)}.record-selection-tools{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;margin:12px 0 16px;font-size:12px}.record-selection-tools>label{display:inline-flex;align-items:center;gap:8px;min-height:44px}.record-selection-tools>.button{margin-left:auto}.type-filter,.photo-fields>label,.recording-file-label{display:grid;gap:8px;font-size:13px}.type-filter{margin:8px 0}.photo-fields{display:grid;gap:16px;margin:8px 0 16px}.photo-fields textarea{min-height:76px}.photo-details label{display:grid;gap:8px;margin-top:16px}.photo-details button{margin-top:16px}.recording-section{margin:28px 0 16px;min-width:0}.recording-section h3{margin:0 0 8px}.recording-file-label{margin-top:16px}.recording-item,#recording-preview{overflow-wrap:anywhere}.recording-section audio{display:block;width:100%;margin-top:12px}.recording-section #save-recording{margin-top:16px}#delete-name{white-space:pre-line;max-height:24vh;overflow:auto}.record-context{display:grid;gap:8px}.record-context select{margin-top:0}
+@media(max-width:640px){.record-selection-tools{gap:4px 10px}.record-list-entry{grid-template-columns:22px minmax(0,1fr);gap:8px}.record-selection-tools>.button{margin-left:0}.recording-section h3 .optional{display:block;margin-left:0;margin-top:4px}}
+
 .backup-setup{max-width:760px;margin:28px auto;padding:20px;background:#f7f7f7;border-radius:12px}.backup-setup label{display:block;margin:12px 0}.backup-setup input{width:100%}.backup-setup p{font-size:13px;line-height:1.6}.header-right{flex-wrap:wrap}#pc-backup-status{max-width:260px}
 
 @media(max-width:640px){body:not([data-view="transfer"]) .backup-setup{display:none}}
+
+#visit-record-note{margin:12px 0 20px}

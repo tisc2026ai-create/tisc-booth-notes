@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readBundle } from '../archive.js';
+import {createHash} from 'node:crypto';
 
 // Run against an isolated browser profile; no real consultation data is read.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -46,7 +47,7 @@ try {
     catch { await wait(100); }
   }
   if (!port) throw new Error(`Chrome did not start: ${chromeError}`);
-  const page = await (await fetch(`http://127.0.0.1:${port}/json/new?${encodeURIComponent(url)}`, { method: 'PUT' })).json();
+  const page = await (await fetch(`http://127.0.0.1:${port}/json/new?${encodeURIComponent(url+'icons/icon.svg')}`, { method: 'PUT' })).json();
   socket = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((done, reject) => { socket.addEventListener('open', done, { once: true }); socket.addEventListener('error', reject, { once: true }); });
   socket.addEventListener('message', ({ data }) => {
@@ -76,12 +77,34 @@ try {
     for (let attempt = 0; attempt < 100; attempt++) { if (await evaluate(expression)) return; await wait(100); }
     throw new Error(`Condition did not become true: ${expression}\n${await evaluate('JSON.stringify({company:document.querySelector("#company")?.value,message:document.querySelector("#message")?.textContent,deleteOpen:document.querySelector("#delete-dialog")?.open,deleteError:document.querySelector("#delete-error")?.textContent})')}`);
   }
-  await eventually('document.readyState === "complete" && document.body.innerText.includes("TiSC")');
+  async function setFile(selector, path) {
+    const dom = await send('DOM.getDocument'), input = await send('DOM.querySelector',{nodeId:dom.root.nodeId,selector});
+    assert.ok(input.nodeId,`Missing file input ${selector}`);
+    await send('DOM.setFileInputFiles',{nodeId:input.nodeId,files:[path]});
+  }
+  async function reload() {
+    const previous=await evaluate('performance.timeOrigin');
+    await send('Page.reload');
+    await eventually(`performance.timeOrigin!==${previous} && Boolean(document.querySelector('#new-record')) && !document.querySelector('#new-record').disabled`);
+  }
+  await eventually('document.readyState === "complete"');
+  const upgradedId=await evaluate(`(async()=>{
+    const id=crypto.randomUUID(),photoId=crypto.randomUUID(),stamp=new Date().toISOString(),bytes=Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6U3sAAAAASUVORK5CYII='),char=>char.charCodeAt(0));
+    const photo={id:photoId,name:'이전 사진.png',type:'image/png',size:bytes.length,path:'cards/'+photoId+'.png'};
+    await new Promise((resolve,reject)=>{const request=indexedDB.open('tisc-booth-notes',1);request.onupgradeneeded=()=>{const db=request.result;db.createObjectStore('records',{keyPath:'id'});db.createObjectStore('cards',{keyPath:'id'}).createIndex('recordId','recordId');};request.onerror=()=>reject(request.error);request.onsuccess=()=>{const db=request.result,tx=db.transaction(['records','cards'],'readwrite');tx.objectStore('records').put({id,createdAt:stamp,updatedAt:stamp,startAt:stamp,endAt:stamp,company:'이전 저장소',memo:'보존 확인',team:'',visitType:'booth',cards:[photo]});tx.objectStore('cards').put({...photo,recordId:id,blob:new Blob([bytes],{type:photo.type})});tx.oncomplete=()=>{db.close();resolve();};tx.onabort=()=>reject(tx.error);};});return id;
+  })()`);
+  await send('Page.navigate',{url});
+  await eventually('document.readyState === "complete" && document.body.innerText.includes("TiSC") && !document.querySelector("#new-record").disabled');
+  assert.ok(await evaluate(`(async()=>{const db=await import('./storage.js'),snapshot=await db.getSnapshot();return snapshot.records.some(record=>record.id===${JSON.stringify(upgradedId)})&&snapshot.cards.length===1&&snapshot.cards[0].blob.size>0&&Array.isArray(snapshot.recordings)&&snapshot.recordings.length===0;})()`),'Upgrading v1 storage must preserve records/photos and create the audio store');
+  await evaluate(`(async()=>{const db=await import('./storage.js'),record=(await db.getRecords()).find(record=>record.id===${JSON.stringify(upgradedId)});await db.deleteRecords([{id:record.id,updatedAt:record.updatedAt}]);})()`);
+  await reload();
+  await eventually('Boolean(document.querySelector("#new-record")) && !document.querySelector("#new-record").disabled');
   assert.equal(await evaluate('document.querySelector("h1").innerText.trim()'),'현장 상담 기록');
   assert.equal(await evaluate('document.querySelector("#backup-url").value'),'https://tisc-backup.tail125579.ts.net','A new browser must show the configured PC address without connecting automatically');
   assert.equal(await evaluate('localStorage.getItem("tisc-pc-backup")'),null,'Showing the default address must not save a backup connection');
   assert.equal(await evaluate('document.querySelector("#team")'),null,'The recorder must not ask users to choose a team');
-  assert.equal(await evaluate('document.querySelector("#visit-type")'),null,'The field recorder must focus on our booth without a visit-type selector');
+  assert.equal(await evaluate('document.querySelector("#visit-type").value'),'booth','New records default to our booth until the user chooses a visit');
+  assert.deepEqual(await evaluate('[...document.querySelector("#visit-filter").options].map(option=>option.value)'),['','booth','visit']);
   assert.equal(await evaluate(`(async()=>{
     const {overlappingRecords}=await import('./app.js');
     const old={id:'old-1',team:'1조',startAt:'2026-10-19T01:00:00Z',endAt:'2026-10-19T01:05:00Z'};
@@ -129,7 +152,7 @@ try {
       targets.push(withPhoto);
     }
     await new Promise((resolve,reject)=>{
-      const request=indexedDB.open('tisc-booth-notes',1);
+      const request=indexedDB.open('tisc-booth-notes');
       request.onsuccess=()=>{
         const connection=request.result,tx=connection.transaction('cards','readwrite');
         const orphanId=crypto.randomUUID();
@@ -149,7 +172,7 @@ try {
     return {id,cardId,zipSize:bundle.size,png:canvas.toDataURL('image/png').split(',')[1]};
   })()`);
   assert.ok(fixture.zipSize > 0);
-  await send('Page.reload');
+  await reload();
   await eventually('document.body.innerText.includes("브라우저 검증 회사")');
   assert.equal(await evaluate('document.querySelectorAll("img[onerror]").length'), 0);
   const records = await evaluate('(async()=>{const db=await import("./storage.js");return await db.getRecords();})()');
@@ -299,7 +322,8 @@ try {
       id:card.id,recordId:card.recordId,type:card.type,size:card.size,
       sha256:Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await card.blob.arrayBuffer())),b=>b.toString(16).padStart(2,'0')).join('')
     })));
-    return {records,cards};
+    const recordings=await Promise.all((await db.getRecordings()).sort((a,b)=>a.id.localeCompare(b.id)).map(async asset=>({id:asset.id,recordId:asset.recordId,type:asset.type,size:asset.size,sha256:Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await asset.blob.arrayBuffer())),b=>b.toString(16).padStart(2,'0')).join('')})));
+    return {records,cards,recordings};
   })()`;
   const beforeUiDeletion = await evaluate(snapshot);
   await evaluate('document.querySelector("#new-record").click()');
@@ -324,9 +348,136 @@ try {
   await eventually('!document.querySelector("#delete-dialog").open && document.querySelector("#company").value === "실제 버튼 상담" && !document.querySelector("#company").disabled');
   assert.deepEqual(await evaluate(snapshot),beforeUiDeletion,'Deleting the selected active consultation must preserve other records and their photos');
   assert.equal(await evaluate('document.body.dataset.view'),'records','Deletion must return to the consultation list');
-  await send('Page.reload');
+  await reload();
   await eventually('document.querySelector("#company").value === "실제 버튼 상담" && !document.querySelector("#company").disabled');
   assert.deepEqual(await evaluate(snapshot),beforeUiDeletion,'Deletion and the surviving active consultation must persist after reload');
+  const beforeFeatures=await evaluate(snapshot), mainRecord=beforeFeatures.records.find(record=>record.company==='실제 버튼 상담');
+  const activeBefore=await evaluate('document.querySelector("#active-count").textContent');
+  await evaluate('document.querySelector("#visit-type").value="visit";document.querySelector("#visit-type").dispatchEvent(new Event("change"));document.querySelector("#new-record").click()');
+  await eventually('document.querySelector("#visit-record-note").hidden===false && !document.querySelector("#company").disabled');
+  await evaluate('document.querySelector("#company").value="방문 일괄 검증 A";document.querySelector("#company").dispatchEvent(new Event("input"));document.querySelector("#memo").value="퇴장 후 회사명 음성 메모와 현장 사진";document.querySelector("#memo").dispatchEvent(new Event("input"))');
+  await eventually('document.querySelector("#save-status").textContent.includes("기기에 저장됨")');
+  assert.equal(await evaluate('document.querySelector("#photo-kind").value'),'booth');
+  assert.ok(await evaluate('["session-banner","time-summary","time-editor","end-record"].every(id=>document.getElementById(id).hidden)'),'Visits must hide clocks, durations and time editing');
+  assert.equal(await evaluate('document.querySelector("#active-count").textContent'),activeBefore);
+  assert.ok(await evaluate('document.querySelector("#overlap-warning").hidden'),'Visits must not create overlap warnings');
+  assert.ok(await evaluate('document.querySelector("#record-form .photo-actions").getBoundingClientRect().top-document.querySelector("#photo-caption").getBoundingClientRect().bottom>=16'),'Photo description and selection controls need at least 16px of space');
+  await setFile('#gallery-file',pngPath);
+  await eventually('(async()=>{const db=await import("./storage.js");return (await db.getRecords()).some(record=>record.company==="방문 일괄 검증 A"&&record.cards.length===1);})()');
+  const audioPath=join(scratch,'방문 원음.wav'),audioBytes=Buffer.alloc(2*1024**2+44);
+  audioBytes.write('RIFF',0);audioBytes.writeUInt32LE(audioBytes.length-8,4);audioBytes.write('WAVEfmt ',8);audioBytes.writeUInt32LE(16,16);audioBytes.writeUInt16LE(1,20);audioBytes.writeUInt16LE(1,22);audioBytes.writeUInt32LE(8000,24);audioBytes.writeUInt32LE(16000,28);audioBytes.writeUInt16LE(2,32);audioBytes.writeUInt16LE(16,34);audioBytes.write('data',36);audioBytes.writeUInt32LE(audioBytes.length-44,40);
+  await writeFile(audioPath,audioBytes);await setFile('#recording-file',audioPath);
+  await eventually('!document.querySelector("#save-recording").disabled && document.querySelector("#recording-preview audio")');
+  const visitA=await evaluate('(async()=>{const db=await import("./storage.js");return (await db.getRecords()).find(record=>record.company==="방문 일괄 검증 A");})()');
+  assert.equal(visitA.visitType,'visit');assert.equal(visitA.timeBasis,'registered');assert.equal(visitA.startAt,visitA.createdAt);assert.equal(visitA.endAt,null);
+  assert.equal(await evaluate('(async()=>{const db=await import("./storage.js");return (await db.getRecordings()).length;})()'),0,'Selecting an audio file must not save it yet');
+  await evaluate(`window.__audioTransaction=IDBDatabase.prototype.transaction;IDBDatabase.prototype.transaction=function(names,mode,...rest){if(mode==='readwrite'&&[...names].includes('recordings'))throw new DOMException('Synthetic audio quota failure','QuotaExceededError');return window.__audioTransaction.call(this,names,mode,...rest);};document.querySelector('#save-recording').click()`);
+  await eventually('document.querySelector("#recording-status").textContent.includes("저장 실패") && !document.querySelector("#save-recording").disabled');
+  assert.equal(await evaluate('document.querySelector("#recording-file").files[0].name'),'방문 원음.wav','A failed save must retain the selected original file for retry');
+  await evaluate('IDBDatabase.prototype.transaction=window.__audioTransaction;delete window.__audioTransaction;document.querySelector("#save-recording").click()');
+  await eventually('document.querySelector("#recordings audio") && !document.querySelector("#company").disabled');
+  assert.equal(await evaluate('document.querySelector("#recording-file").value'),'');
+  assert.equal(await evaluate('(async()=>{const db=await import("./storage.js"),asset=(await db.getRecordings())[0];return Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",await asset.blob.arrayBuffer())),b=>b.toString(16).padStart(2,"0")).join("");})()'),createHash('sha256').update(audioBytes).digest('hex'),'The original audio bytes must be preserved');
+  const featureArtifacts=resolve(root,'../artifacts/exhibition-recorder-preview');await mkdir(featureArtifacts,{recursive:true});
+  for(const [name,width,height] of [['desktop',1440,1050],['mobile',390,1000]]){
+    await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:name==='mobile'});await evaluate('window.scrollTo({top:0,behavior:"instant"})');
+    assert.ok(await evaluate('document.documentElement.scrollWidth<=innerWidth+1'),`${name} visit form must fit without horizontal scrolling`);
+    const shot=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});await writeFile(join(featureArtifacts,`${name}-visit-audio.png`),Buffer.from(shot.data,'base64'));
+  }
+  await send('Emulation.setDeviceMetricsOverride',{width:1440,height:1050,deviceScaleFactor:1,mobile:false});
+  await evaluate('document.querySelector("#new-record").click()');await eventually('document.querySelector("#company").value==="" && !document.querySelector("#company").disabled');
+  await evaluate('document.querySelector("#company").value="방문 일괄 검증 B";document.querySelector("#company").dispatchEvent(new Event("input"))');
+  await eventually('document.querySelector("#save-status").textContent.includes("기기에 저장됨")');
+  await setFile('#recording-file',audioPath);await eventually('!document.querySelector("#save-recording").disabled');
+  await evaluate('document.querySelector("#cancel-recording").click()');assert.equal(await evaluate('document.querySelector("#recording-file").value'),'');
+  assert.equal(await evaluate('(async()=>{const db=await import("./storage.js");return (await db.getRecordings()).length;})()'),1,'Cancelling another audio selection must preserve all saved audio');
+  const visitB=await evaluate('(async()=>{const db=await import("./storage.js");return (await db.getRecords()).find(record=>record.company==="방문 일괄 검증 B");})()');
+  const existingDownloads=new Set(await readdir(downloads));await evaluate('document.querySelector("#export-all").click()');
+  let audioZip;
+  for(let attempt=0;attempt<100;attempt++){const name=(await readdir(downloads)).find(name=>name.endsWith('.zip')&&!existingDownloads.has(name));if(name){audioZip=join(downloads,name);break;}await wait(100);}
+  assert.ok(audioZip);const visitArchive=await readBundle(new Blob([await readFile(audioZip)]));
+  assert.equal(visitArchive.recordings.length,1);assert.deepEqual(Buffer.from(await visitArchive.recordings[0].blob.arrayBuffer()),audioBytes);
+  assert.equal(visitArchive.records.find(record=>record.id===visitA.id).timeBasis,'registered');assert.equal(visitArchive.records.find(record=>record.id===visitA.id).cards[0].kind,'booth');
+  assert.ok(await evaluate(`(async()=>{
+    const db=await import('./storage.js'),archive=await import('./archive.js'),snapshot=await db.getSnapshot(),asset=snapshot.recordings[0];
+    let current=snapshot.records.find(record=>record.id===${JSON.stringify(visitB.id)});
+    const make=(id,blob)=>({id,name:'교체.wav',type:blob.type,size:blob.size,path:'recordings/'+id+'.wav',recordId:current.id,blob});
+    const stamp=record=>new Date(Date.parse(record.updatedAt)+1).toISOString(),metadata=asset=>{const {recordId,blob,hash,...value}=asset;return value;};
+    const first=make(crypto.randomUUID(),asset.blob),original=current.updatedAt;
+    current={...current,updatedAt:stamp(current),recordings:[metadata(first)]};await db.saveRecording(current,first,original);
+    const changedBytes=new Uint8Array(await asset.blob.arrayBuffer());changedBytes[changedBytes.length-1]=7;
+    const second=make(crypto.randomUUID(),new Blob([changedBytes],{type:asset.type})),previous=current.updatedAt;
+    current={...current,updatedAt:stamp(current),recordings:[metadata(second)]};await db.saveRecording(current,second,previous);
+    let saved=await db.getRecordings();if(saved.some(item=>item.id===first.id)||!saved.some(item=>item.id===asset.id)||!saved.some(item=>item.id===second.id))throw new Error('Replacing one audio must remove only its previous blob');
+    const before=JSON.stringify(await db.getSnapshot());
+    for(const attempt of [()=>db.saveRecord({...current,memo:'stale'},original),()=>db.deleteRecording({...current,updatedAt:stamp(current),recordings:[]},second.id,original)]){let rejected=false;try{await attempt();}catch{rejected=true;}if(!rejected)throw new Error('Stale audio/source operations must be rejected');}
+    changedBytes[changedBytes.length-1]=8;
+    const altered={...second,blob:new Blob([changedBytes],{type:asset.type})},added={...current,id:crypto.randomUUID(),recordings:[]};
+    let conflicted=false;try{await db.importRecords({records:[added,current],cards:[],recordings:[altered]});}catch{conflicted=true;}
+    if(!conflicted||JSON.stringify(await db.getSnapshot())!==before)throw new Error('Same revision different audio must roll back the whole import');
+    const empty={...current,updatedAt:stamp(current),recordings:[]};await db.deleteRecording(empty,second.id,current.updatedAt);
+    saved=await db.getRecordings();if(saved.length!==1||saved[0].id!==asset.id)throw new Error('Selective audio deletion must preserve unrelated audio');
+    const round=await archive.readBundle(await archive.createBundle(snapshot.records,snapshot.cards,snapshot.recordings));
+    return round.recordings.length===1&&round.records.find(record=>record.id===asset.recordId).timeBasis==='registered';
+  })()`),'Real IndexedDB audio replacement, stale protection, same-revision hash conflict rollback, unrelated preservation and ZIP v2 import must work');
+  assert.ok(await evaluate(`(async()=>{
+    const db=await import('./storage.js'),{FieldSync}=await import('./field-sync.js'),{recordingDigest}=await import('./assets.js'),snapshot=await db.getSnapshot(),originalFetch=window.fetch,blobs=new Map();
+    let saved=null,lost=false,resumed=false,sent=0;
+    const reply=value=>new Response(JSON.stringify(value),{headers:{'Content-Type':'application/json'}});
+    window.fetch=async(raw,options)=>{
+      const url=new URL(raw),path=url.pathname.split('/sync')[1];
+      if(path==='/status'){const descriptors=JSON.parse(options.body),states=values=>values.map(asset=>({sha256:asset.sha256,offset:blobs.get(asset.sha256)?.bytes.length||0,complete:blobs.get(asset.sha256)?.complete||false}));return reply({chunkBytes:1048576,schemaVersion:saved?.schemaVersion||3,revision:saved?.revision||0,records:saved?.records||[],hashes:saved?.photos||[],recordingHashes:saved?.recordings||[],photos:states(descriptors.photos),recordings:states(descriptors.recordings)});}
+      if(path.startsWith('/blobs/')){
+        const hash=path.split('/').at(-1);
+        if(options.method!=='POST'){const asset=blobs.get(hash),offset=Number(url.searchParams.get('offset')||0),length=Number(url.searchParams.get('length')||asset.bytes.length);return new Response(asset.bytes.slice(offset,offset+length),{headers:{'Content-Type':asset.type}});}
+        const offset=Number(url.searchParams.get('offset')),part=new Uint8Array(await options.body.arrayBuffer()),bytes=new Uint8Array(offset+part.length),type=url.searchParams.get('type');if(offset)bytes.set(blobs.get(hash).bytes);bytes.set(part,offset);sent+=part.length;blobs.set(hash,{bytes,type,complete:bytes.length===Number(url.searchParams.get('size'))});
+        if(type.startsWith('audio/')&&!lost){lost=true;throw new Error('Synthetic lost audio acknowledgement');}
+        if(type.startsWith('audio/')&&offset===1048576)resumed=true;
+        return reply({offset:bytes.length,complete:blobs.get(hash).complete});
+      }
+      if(options.method==='POST'){saved=JSON.parse(options.body);return reply({records:saved.records.length,photos:saved.photos.length,recordings:saved.recordings.length,revision:saved.revision,savedAt:new Date().toISOString()});}
+      return reply(saved);
+    };
+    let sync;
+    try{
+      const config={url:'https://backup.example.test',token:'x'.repeat(43),deviceId:crypto.randomUUID(),label:'음성 합성 검증'},first=new FieldSync(async()=>snapshot,()=>{});first.schedule=()=>{};first.connect(config);await first.send();if(first.signature||saved)throw new Error('Partial audio must not commit a snapshot');
+      sync=new FieldSync(async()=>snapshot,()=>{});sync.schedule=()=>{};await sync.send();if(!sync.signature||!resumed)throw new Error('Audio must resume after its confirmed chunk');
+      const uploaded=sent,record=snapshot.records.find(record=>record.id===${JSON.stringify(visitA.id)});record.memo+=' · 메모만 전송';record.updatedAt=new Date(Date.parse(record.updatedAt)+1).toISOString();await sync.send();if(sent!==uploaded)throw new Error('Memo updates must send zero unchanged photo/audio bytes');
+      const restored=await sync.restore();sync.cancelRestore(restored);return restored.recordings.length===1&&await recordingDigest(restored.recordings[0].blob)===snapshot.recordings[0].hash;
+    }finally{sync?.disconnect();window.fetch=originalFetch;}
+  })()`),'Photos and real persisted audio must resume lost acknowledgements, skip unchanged bytes for memo edits and restore exact audio by bounded ranges');
+  await reload();await eventually('document.querySelector("#company")?.value==="실제 버튼 상담" && !document.querySelector("#company").disabled');
+  await evaluate(`document.querySelector('.record-item[data-id="${mainRecord.id}"]').click()`);await eventually('document.querySelector("#company").value==="실제 버튼 상담" && !document.querySelector("#company").disabled');
+  await evaluate('document.querySelector("#toggle-times").click();document.querySelector("#manual-end").value="2026-10-20T20:00:05";document.querySelector("#visit-filter").value="visit";document.querySelector("#visit-filter").dispatchEvent(new Event("change"))');
+  assert.equal(await evaluate('document.querySelectorAll(".record-item").length'),2);
+  await evaluate(`document.querySelector('.record-select[data-record-id="${visitB.id}"]').click();document.querySelector('.record-select[data-record-id="${visitA.id}"]').click()`);
+  assert.equal(await evaluate('document.querySelector("#record-selection-count").textContent'),'2건 선택');
+  assert.equal(await evaluate('document.querySelector("#company").value'),'실제 버튼 상담','Checking rows must not switch the editor');
+  const beforeBulkCancel=await evaluate(snapshot);await evaluate('document.querySelector("#delete-selected-records").click()');
+  await eventually('document.querySelector("#delete-dialog").open && !document.querySelector("#delete-confirm").disabled');
+  assert.ok(await evaluate('document.querySelector("#delete-name").textContent.includes("방문 일괄 검증 A")&&document.querySelector("#delete-name").textContent.includes("방문 일괄 검증 B")'));
+  assert.ok(await evaluate('document.querySelector("#delete-counts").textContent.includes("사진 1장 · 녹음 1개")'));
+  await evaluate('document.querySelector("#delete-cancel").click()');await eventually('!document.querySelector("#delete-dialog").open');
+  assert.deepEqual(await evaluate(snapshot),beforeBulkCancel,'Bulk cancel must preserve all record, photo and audio bytes');
+  assert.equal(await evaluate('document.querySelector("#manual-end").value'),'2026-10-20T20:00:05');
+  await evaluate('document.querySelector("#delete-selected-records").click()');await eventually('document.querySelector("#delete-dialog").open && !document.querySelector("#delete-confirm").disabled');
+  await evaluate(`(async()=>{const db=await import('./storage.js'),record=(await db.getRecords()).find(record=>record.id===${JSON.stringify(visitB.id)});await db.saveRecord({...record,memo:'다른 탭 최신 메모',updatedAt:new Date(Date.parse(record.updatedAt)+1).toISOString()},record.updatedAt);})()`);
+  const beforeStale=await evaluate(snapshot);await evaluate('document.querySelector("#delete-confirm").click()');
+  await eventually('document.querySelector("#delete-error").textContent.includes("다른 화면") && !document.querySelector("#delete-confirm").disabled');
+  assert.deepEqual(await evaluate(snapshot),beforeStale,'One stale target must roll back every selected record/photo/audio deletion');
+  await evaluate('document.querySelector("#delete-cancel").click()');await reload();
+  await eventually('document.querySelector("#company").value==="실제 버튼 상담" && !document.querySelector("#company").disabled');
+  await evaluate('document.querySelector("#visit-filter").value="visit";document.querySelector("#visit-filter").dispatchEvent(new Event("change"));document.querySelector("#select-visible-records").click()');
+  assert.equal(await evaluate('document.querySelectorAll(".record-select:checked").length'),2);
+  await evaluate('document.querySelector("#visit-filter").value="booth";document.querySelector("#visit-filter").dispatchEvent(new Event("change"))');
+  assert.equal(await evaluate('document.querySelectorAll(".record-select:checked").length'),0,'Changing the filter must reset selection');
+  await evaluate('document.querySelector("#visit-filter").value="visit";document.querySelector("#visit-filter").dispatchEvent(new Event("change"));document.querySelector("#select-visible-records").click();document.querySelector("#toggle-times").click();document.querySelector("#manual-end").value="2026-10-20T20:00:05";document.querySelector("#delete-selected-records").click()');
+  await eventually('document.querySelector("#delete-dialog").open && !document.querySelector("#delete-confirm").disabled');await evaluate('document.querySelector("#delete-confirm").click()');
+  await eventually('!document.querySelector("#delete-dialog").open && !document.querySelector("#company").disabled');
+  assert.deepEqual(await evaluate(snapshot),beforeFeatures,'Bulk deletion must preserve every unselected consultation and its original attachments');
+  assert.equal(await evaluate('document.querySelector("#company").value'),'실제 버튼 상담');assert.equal(await evaluate('document.querySelector("#time-editor").hidden'),false);assert.equal(await evaluate('document.querySelector("#manual-end").value'),'2026-10-20T20:00:05','A surviving editor must retain its unsaved clock draft');
+  await evaluate('document.querySelector("#toggle-times").click();document.querySelector("#visit-filter").value="";document.querySelector("#visit-filter").dispatchEvent(new Event("change"))');
+  console.log('PASS: filtered batch selection without editor switching, cancel with exact data preservation, stale-target atomic rollback including audio, surviving editor/draft preservation, visits without time controls or overlap/active counts, spaced photo controls, explicit audio selection/save/cancel, failed-save original-file retry, exact audio bytes and ZIP round trip.');
   await evaluate(`(() => {
     for(const [id,value] of [['company','A 도로운영사 · 테스트'],['memo','높이 제한 검지 시스템 교체 문의\\n현장 데모 요청']]) {
       const input=document.getElementById(id);input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));
@@ -359,7 +510,7 @@ try {
   }
   if (await evaluate('"serviceWorker" in navigator')) {
     await evaluate('navigator.serviceWorker.ready.then(()=>true)');
-    await send('Page.reload');
+    await reload();
     await eventually('!!navigator.serviceWorker.controller');
     if (!process.argv[2]) {
       assert.ok(await evaluate('caches.has("tisc-field-notes-v2")'),'The previous worker must be active before the update');
@@ -378,7 +529,7 @@ try {
     }
     await send('Network.enable');
     await send('Network.emulateNetworkConditions', { offline:true,latency:0,downloadThroughput:0,uploadThroughput:0 });
-    await send('Page.reload');
+    await reload();
     await eventually('document.body.innerText.includes("A 도로운영사 · 테스트")');
   }
   assert.deepEqual(exceptions, [], `Browser exceptions: ${exceptions.join(', ')}`);

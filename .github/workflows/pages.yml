@@ -35,7 +35,7 @@ jobs:
       - name: Prepare public files
         run: |
           mkdir -p _site/icons
-          cp index.html styles.css app.js storage.js archive.js field-sync.js sw.js _site/
+          cp index.html styles.css app.js storage.js archive.js field-sync.js assets.js sw.js _site/
           cp icons/icon.svg _site/icons/
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v6

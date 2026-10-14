@@ -1,4 +1,5 @@
 import {readBundle, validateRecord, validateImage} from './archive.js';
+import {AUDIO_CHUNK_BYTES, recordingDigest, recordingTreeDigest, validateRecordingHeader, sha256} from './assets.js';
 
 const KEY = 'tisc-pc-backup';
 const MAX_JSON_BYTES = 8 * 1024 * 1024;
@@ -15,39 +16,43 @@ function revision(value, allowZero = false) {
   return value;
 }
 
-function manifestData(records, photos) {
-  if (!Array.isArray(records) || records.length > 5000 || !Array.isArray(photos) || photos.length > 4999) throw new Error('PC 백업 목록이 너무 크거나 올바르지 않습니다.');
-  const clean = records.map(validateRecord).sort((a, b) => a.id.localeCompare(b.id));
+function manifestData(records, photos, recordings = [], version) {
+  if (!Array.isArray(records) || records.length > 5000 || !Array.isArray(photos) || !Array.isArray(recordings) || photos.length + recordings.length > 4999) throw new Error('PC 백업 목록이 너무 크거나 올바르지 않습니다.');
+  const clean = records.map(validateRecord).sort((a,b) => a.id.localeCompare(b.id));
   if (new Set(clean.map(record => record.id)).size !== clean.length) throw new Error('PC 백업 상담 ID가 중복되었습니다.');
-  const references = new Map();
-  for (const record of clean) for (const card of record.cards) {
-    if (references.has(card.id)) throw new Error('여러 상담에 같은 사진이 연결되어 있습니다.');
-    references.set(card.id, {...card, recordId: record.id});
+  const inferred = clean.some(record => record.timeBasis !== undefined || record.recordings !== undefined) ? 3 : 2;
+  if (version !== undefined && (![2,3].includes(version) || version < inferred)) throw new Error('PC 백업 버전과 첨부 정보가 일치하지 않습니다.');
+  const references = new Map(), recordingReferences = new Map(), ids = new Set();
+  for (const record of clean) for (const [assets,target] of [[record.cards,references],[record.recordings || [],recordingReferences]]) for (const asset of assets) {
+    if (ids.has(asset.id)) throw new Error('여러 기록에 같은 첨부 ID가 연결되어 있습니다.');
+    ids.add(asset.id);target.set(asset.id,{...asset,recordId:record.id});
   }
-  if (references.size !== photos.length) throw new Error('PC 백업 사진 목록과 상담이 일치하지 않습니다.');
-  const ids = new Set();
-  const hashes = photos.map(photo => {
-    const reference = references.get(photo?.id);
-    if (!reference || ids.has(photo.id) || reference.recordId !== photo.recordId || !HASH.test(photo.sha256)) throw new Error('PC 백업 사진의 연결 또는 해시가 올바르지 않습니다.');
-    ids.add(photo.id);
-    return {id: photo.id, recordId: photo.recordId, sha256: photo.sha256};
-  }).sort((a, b) => a.id.localeCompare(b.id));
-  return {records: clean, photos: hashes, references};
+  const hashes = (values,refs) => {
+    if (refs.size !== values.length) throw new Error('PC 백업 첨부 목록과 기록이 일치하지 않습니다.');
+    const seen = new Set();
+    return values.map(asset => {
+      const reference = refs.get(asset?.id);
+      if (!reference || seen.has(asset.id) || reference.recordId !== asset.recordId || !HASH.test(asset.sha256)) throw new Error('PC 백업 첨부의 연결 또는 해시가 올바르지 않습니다.');
+      seen.add(asset.id);return {id:asset.id,recordId:asset.recordId,sha256:asset.sha256};
+    }).sort((a,b) => a.id.localeCompare(b.id));
+  };
+  return {schemaVersion:version ?? inferred,records:clean,photos:hashes(photos,references),recordings:hashes(recordings,recordingReferences),references,recordingReferences};
 }
 
 function includesRemote(local, remote) {
-  const records = new Map(local.records.map(record => [record.id, record]));
-  const hashes = new Map(local.photos.map(photo => [photo.id, photo.sha256]));
+  const records = new Map(local.records.map(record => [record.id,record]));
+  const hashes = new Map([...local.photos,...local.recordings].map(asset => [asset.id,asset.sha256]));
   return remote.records.every(record => {
     const current = records.get(record.id);
     if (!current || current.updatedAt < record.updatedAt) return false;
     if (current.updatedAt > record.updatedAt) return true;
     return JSON.stringify(current) === JSON.stringify(record)
-      && remote.photos.filter(photo => photo.recordId === record.id).every(photo => hashes.get(photo.id) === photo.sha256);
+      && [...remote.photos,...remote.recordings].filter(asset => asset.recordId === record.id).every(asset => hashes.get(asset.id) === asset.sha256);
   });
 }
 
-const signatureOf = snapshot => digest(encoder.encode(JSON.stringify({records: snapshot.records, photos: snapshot.photos})));
+const signatureOf = snapshot => digest(encoder.encode(JSON.stringify({records:snapshot.records,photos:snapshot.photos,
+  ...(snapshot.schemaVersion === 3 ? {recordings:snapshot.recordings} : {})})));
 
 export function backupConfig(value) {
   if (!value || typeof value !== 'object') throw new Error('PC 연결 정보가 올바르지 않습니다.');
@@ -140,25 +145,28 @@ export class FieldSync {
     if (encoder.encode(body).length > MAX_JSON_BYTES) throw new Error('백업 기록 목록은 8MiB를 넘을 수 없습니다. 날짜별 ZIP을 별도로 보관해 주세요.');
     return this.request(connection, path, {method: 'POST', body, headers: {'Content-Type': 'application/json'}});
   }
-  async prepare(snapshot) {
-    if (!snapshot || !Array.isArray(snapshot.cards)) throw new Error('기기 사진 목록이 올바르지 않습니다.');
-    const photos = [];
-    const blobs = new Map();
-    for (const card of snapshot.cards) {
-      if (!(card.blob instanceof Blob) || card.blob.size !== card.size || card.blob.type !== card.type) throw new Error('기기 사진의 크기 또는 형식이 일치하지 않습니다.');
-      const sha256 = HASH.test(card.hash) ? card.hash : await digest(await card.blob.arrayBuffer());
-      photos.push({id: card.id, recordId: card.recordId, sha256});
-      const previous = blobs.get(sha256);
-      if (previous && (previous.size !== card.size || previous.type !== card.type)) throw new Error('같은 사진 해시의 크기 또는 형식이 다릅니다.');
-      blobs.set(sha256, {sha256, size: card.size, type: card.type, blob: card.blob});
+  async prepare(snapshot, connection = this.config) {
+    if (!snapshot || !Array.isArray(snapshot.cards) || (snapshot.recordings !== undefined && !Array.isArray(snapshot.recordings))) throw new Error('기기 첨부 목록이 올바르지 않습니다.');
+    const photos = [], recordings = [], blobs = new Map();
+    for (const [assets,target,kind] of [[snapshot.cards,photos,'photo'],[snapshot.recordings || [],recordings,'recording']]) for (const asset of assets) {
+      if (!(asset.blob instanceof Blob) || asset.blob.size !== asset.size || asset.blob.type !== asset.type) throw new Error('기기 첨부의 크기 또는 형식이 일치하지 않습니다.');
+      const hash = HASH.test(asset.hash) ? asset.hash : kind === 'recording' ? await recordingDigest(asset.blob,(done,total) => {
+        this.assertSending(connection);this.status(`PC 녹음 확인 · ${bytesLabel(done)} / ${bytesLabel(total)}`);
+      }) : await digest(await asset.blob.arrayBuffer());
+      target.push({id:asset.id,recordId:asset.recordId,sha256:hash});
+      const previous = blobs.get(hash);
+      if (previous && (previous.size !== asset.size || previous.type !== asset.type || previous.kind !== kind)) throw new Error('같은 첨부 해시의 크기 또는 형식이 다릅니다.');
+      blobs.set(hash,{sha256:hash,size:asset.size,type:asset.type,blob:asset.blob,kind});
     }
-    const clean = manifestData(snapshot.records, photos);
-    for (const card of snapshot.cards) {
-      const reference = clean.references.get(card.id);
-      if (['name', 'type', 'size', 'path', 'kind', 'caption'].some(key => reference[key] !== card[key])) throw new Error('기기 사진과 상담의 연결 정보가 일치하지 않습니다.');
+    const clean = manifestData(snapshot.records,photos,recordings);
+    for (const [assets,refs,keys] of [[snapshot.cards,clean.references,['name','type','size','path','kind','caption']],
+      [snapshot.recordings || [],clean.recordingReferences,['name','type','size','path']]]) for (const asset of assets) {
+      const reference = refs.get(asset.id);
+      if (keys.some(key => reference[key] !== asset[key])) throw new Error('기기 첨부와 기록의 연결 정보가 일치하지 않습니다.');
     }
-    return {...clean, blobs};
+    return {...clean,blobs};
   }
+
   send() {
     if (this.running || this.restoring || !this.config) return Promise.resolve();
     this.currentSend = this.sendSnapshot();
@@ -176,16 +184,18 @@ export class FieldSync {
         const {emptyIntent, ...progress} = this.progress;
         this.saveProgress(connection, progress);
       }
-      const signature = await signatureOf(snapshot);
+      let signature = await signatureOf(snapshot);
       this.assertSending(connection);
       if (signature === this.signature) return;
       // An empty browser must restore its existing PC backup before replacing it.
       if (!snapshot.records.length && !this.progress?.emptyIntent) { this.status('PC 연결 정보 저장됨 · 복원으로 백업 확인'); return; }
-      this.status('PC 사진 전송 상태 확인 중…');
-      const status = await (await this.json(connection, '/sync/status', {photos: [...snapshot.blobs.values()].map(({sha256, size, type}) => ({sha256, size, type}))})).json();
+      this.status('PC 첨부 전송 상태 확인 중…');
+      const descriptors = kind => [...snapshot.blobs.values()].filter(asset => asset.kind === kind).map(({sha256,size,type}) => ({sha256,size,type}));
+      const status = await (await this.json(connection,'/sync/status',{photos:descriptors('photo'),recordings:descriptors('recording')})).json();
       this.assertSending(connection);
       const expectedRevision = revision(status.revision, true);
-      const remote = manifestData(status.records, status.hashes);
+      const remote = manifestData(status.records,status.hashes,status.recordingHashes || [],status.schemaVersion);
+      if (remote.schemaVersion > snapshot.schemaVersion) { snapshot.schemaVersion = remote.schemaVersion;signature = await signatureOf(snapshot); }
       const pending = this.progress?.pending;
       const acknowledged = pending?.revision === expectedRevision && pending.signature === await signatureOf(remote);
       this.assertSending(connection);
@@ -197,9 +207,9 @@ export class FieldSync {
       }
       if (!this.progress) this.saveProgress(connection, {revision: expectedRevision});
       if (!snapshot.records.length && this.progress.emptyIntent?.revision !== expectedRevision) throw new Error(RESTORE_FIRST);
-      if (!Number.isSafeInteger(status.chunkBytes) || status.chunkBytes < 1 || status.chunkBytes > MAX_CHUNK_BYTES || !Array.isArray(status.photos) || status.photos.length !== snapshot.blobs.size) throw new Error('PC 사진 전송 상태가 올바르지 않습니다.');
+      if (!Number.isSafeInteger(status.chunkBytes) || status.chunkBytes < 1 || status.chunkBytes > MAX_CHUNK_BYTES || !Array.isArray(status.photos) || (status.recordings !== undefined && !Array.isArray(status.recordings)) || status.photos.length + (status.recordings || []).length !== snapshot.blobs.size) throw new Error('PC 사진 전송 상태가 올바르지 않습니다.');
       const offsets = new Map();
-      for (const photo of status.photos) {
+      for (const photo of [...status.photos,...(status.recordings || [])]) {
         const blob = snapshot.blobs.get(photo.sha256);
         if (!blob || offsets.has(photo.sha256) || !Number.isSafeInteger(photo.offset) || photo.offset < 0 || photo.offset > blob.size
             || typeof photo.complete !== 'boolean' || photo.complete !== (photo.offset === blob.size)) throw new Error('PC 사진의 이어 보내기 위치가 올바르지 않습니다.');
@@ -217,7 +227,7 @@ export class FieldSync {
         let offset = offsets.get(photo.sha256);
         while (offset < photo.size) {
           this.assertSending(connection);
-          this.status(`PC 사진 전송 ${index + 1}/${missing.length} · 남은 ${bytesLabel(remaining)}`);
+          this.status(`PC ${photo.kind === 'recording' ? '녹음' : '사진'} 전송 ${index + 1}/${missing.length} · 남은 ${bytesLabel(remaining)}`);
           const end = Math.min(photo.size, offset + status.chunkBytes);
           const result = await (await this.request(connection, `/sync/blobs/${photo.sha256}?offset=${offset}&size=${photo.size}&type=${encodeURIComponent(photo.type)}`, {
             method: 'POST', body: photo.blob.slice(offset, end), headers: {'Content-Type': 'application/octet-stream'},
@@ -228,14 +238,14 @@ export class FieldSync {
           offset = result.offset;
         }
       }
-      this.status(missing.length ? 'PC 사진 전송 완료 · 기록·메모 저장 중…' : 'PC 기록·메모 갱신 중 · 사진 전송 없음');
+      this.status(missing.length ? 'PC 첨부 전송 완료 · 기록·메모 저장 중…' : 'PC 기록·메모 갱신 중 · 사진 전송 없음 · 녹음 전송 없음');
       this.lastRevision = Math.max(Date.now(), this.lastRevision + 1, expectedRevision + 1, (this.progress?.pending?.revision || 0) + 1);
       const nextRevision = revision(this.lastRevision);
       this.saveProgress(connection, {...this.progress, pending: {revision: nextRevision, signature}});
-      const result = await (await this.json(connection, '/sync/manifest', {schemaVersion: 2, revision: nextRevision, expectedRevision,
-        label: connection.label, records: snapshot.records, photos: snapshot.photos})).json();
+      const result = await (await this.json(connection, '/sync/manifest', {schemaVersion:snapshot.schemaVersion,revision:nextRevision,expectedRevision,
+        label:connection.label,records:snapshot.records,photos:snapshot.photos,...(snapshot.schemaVersion === 3 ? {recordings:snapshot.recordings} : {})})).json();
       this.assertSending(connection);
-      if (result.revision !== nextRevision || result.records !== snapshot.records.length || result.photos !== snapshot.photos.length) throw new Error('PC 백업 저장 확인이 올바르지 않습니다.');
+      if (result.revision !== nextRevision || result.records !== snapshot.records.length || result.photos !== snapshot.photos.length || (snapshot.schemaVersion === 3 && result.recordings !== snapshot.recordings.length)) throw new Error('PC 백업 저장 확인이 올바르지 않습니다.');
       this.saveProgress(connection, {revision: nextRevision,
         ...(snapshot.records.length && this.progress.emptyIntent ? {emptyIntent: {revision: nextRevision}} : {})});
       this.signature = signature;
@@ -262,9 +272,9 @@ export class FieldSync {
         bundle = await readBundle(await (await this.request(connection, '')).blob());
       }
       if (manifest) {
-        if (manifest.schemaVersion !== 2) throw new Error('지원하지 않는 PC 백업 버전입니다.');
+        if (![2,3].includes(manifest.schemaVersion)) throw new Error('지원하지 않는 PC 백업 버전입니다.');
         revision(manifest.revision);
-        const clean = manifestData(manifest.records, manifest.photos);
+        const clean = manifestData(manifest.records,manifest.photos,manifest.recordings || [],manifest.schemaVersion);
         const blobs = new Map();
         const cards = [];
         for (const photo of clean.photos) {
@@ -284,7 +294,25 @@ export class FieldSync {
           if (blob.size !== reference.size || blob.type !== reference.type) throw new Error('PC 사진과 상담의 연결 정보가 일치하지 않습니다.');
           cards.push({...reference, blob, hash: photo.sha256});
         }
-        bundle = {records: clean.records, cards};
+        const recordings = [];
+        for (const audio of clean.recordings) {
+          const reference = clean.recordingReferences.get(audio.id), parts = [], leaves = [];
+          for (let offset = 0; offset < reference.size; offset += AUDIO_CHUNK_BYTES) {
+            this.assertConnection(connection);
+            const length = Math.min(AUDIO_CHUNK_BYTES,reference.size - offset);
+            this.status(`PC 녹음 복원 · 남은 ${bytesLabel(reference.size - offset)}`);
+            const response = await this.request(connection,`/sync/blobs/${audio.sha256}?offset=${offset}&length=${length}`);
+            if (response.headers.get('Content-Type')?.split(';')[0].trim() !== reference.type) throw new Error('PC 녹음 형식이 일치하지 않습니다.');
+            const part = await response.blob();
+            if (part.size !== length) throw new Error('PC 녹음 조각의 크기가 일치하지 않습니다.');
+            const bytes = new Uint8Array(await part.arrayBuffer());
+            if (!offset) validateRecordingHeader(bytes,reference.type);
+            leaves.push(await sha256(bytes));parts.push(part);
+          }
+          if (await recordingTreeDigest(reference.size,reference.type,leaves) !== audio.sha256) throw new Error('PC 녹음 검증에 실패했습니다. 기기 기록은 바뀌지 않았습니다.');
+          recordings.push({...reference,blob:new Blob(parts,{type:reference.type}),hash:audio.sha256});
+        }
+        bundle = {records:clean.records,cards,...(manifest.schemaVersion === 3 ? {recordings} : {})};
       }
       this.assertConnection(connection);
       this.pendingRestore = {bundle, connection, revision: manifest?.revision ?? null};

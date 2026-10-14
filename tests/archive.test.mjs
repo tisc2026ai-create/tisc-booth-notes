@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { createBundle, readBundle, validateRecord, MAX_BUNDLE_BYTES } from '../archive.js';
+import {audioFixture} from './audio-fixtures.mjs';
 
 const recordId = '013cf837-4a88-42cd-91d4-9a5afbd58ce9';
 const cardId = '811d625a-9718-45da-b9f7-b0cba18c7fa4';
@@ -65,6 +66,24 @@ test('empty exports and unfinished consultations remain usable', async () => {
   assert.deepEqual(await readBundle(await createBundle([], [])), { records: [], cards: [] });
   const draft = record({ company: '', endAt: null, cards: [] });
   assert.deepEqual((await readBundle(await createBundle([draft], []))).records, [draft]);
+});
+
+test('ZIP v2 preserves registered visits and exact audio bytes while v1 remains unchanged',async()=>{
+  const fixture=await audioFixture();const bundle=await createBundle(fixture.records,fixture.cards,fixture.recordings),restored=await readBundle(bundle);
+  assert.deepEqual(restored.records,fixture.records);assert.deepEqual(restored.cards,[]);assert.equal(restored.recordings.length,1);
+  assert.deepEqual(await restored.recordings[0].blob.arrayBuffer(),await fixture.recordings[0].blob.arrayBuffer());
+  assert.equal(restored.recordings[0].type,'audio/wav');assert.equal(restored.records[0].timeBasis,'registered');
+  await assert.rejects(readBundle(await modifyManifest(bundle,'"schemaVersion":2','"schemaVersion":1')),/버전/);
+  await assert.rejects(createBundle(fixture.records,[],[]),/누락/);
+  assert.throws(()=>validateRecord({...fixture.records[0],endAt:fixture.records[0].createdAt}),/등록 시각/);
+  assert.throws(()=>validateRecord({...fixture.records[0],recordings:[...fixture.records[0].recordings,...fixture.records[0].recordings]}),/하나/);
+});
+
+test('oversized audio ZIP is rejected before reading a complete recording',async()=>{
+  const fixture=await audioFixture(),size=MAX_BUNDLE_BYTES+1;
+  class OversizedAudio extends Blob{get size(){return size;}arrayBuffer(){throw new Error('Must not read oversized audio into a ZIP');}}
+  fixture.records[0].recordings[0].size=size;fixture.recordings[0].size=size;fixture.recordings[0].blob=new OversizedAudio([],{type:'audio/wav'});
+  await assert.rejects(createBundle(fixture.records,[],fixture.recordings),/256MB/);
 });
 
 test('photo purpose and description survive ZIP transfer without changing legacy metadata', async () => {
@@ -152,7 +171,7 @@ test('duplicate ZIP names and unsupported compression are refused', async () => 
 
 test('valid ZIP checksums do not bypass manifest version or timestamp validation', async () => {
   const bundle = await fixture();
-  await assert.rejects(readBundle(await modifyManifest(bundle, '"schemaVersion":1', '"schemaVersion":2')), /버전/);
+  await assert.rejects(readBundle(await modifyManifest(bundle, '"schemaVersion":1', '"schemaVersion":3')), /버전/);
   await assert.rejects(readBundle(await modifyManifest(bundle, '2026-10-19T01:17:00.000Z', '2026-02-30T01:17:00.000Z')), /날짜/);
 });
 

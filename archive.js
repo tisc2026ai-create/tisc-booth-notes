@@ -1,3 +1,5 @@
+import {recordingMetadata, validateRecordingHeader} from './assets.js';
+
 export const MAX_BUNDLE_BYTES = 256 * 1024 * 1024;
 const MAX_ENTRIES = 5000;
 const MAX_MANIFEST_BYTES = 8 * 1024 * 1024;
@@ -61,12 +63,23 @@ export function validateRecord(record) {
   if (!Array.isArray(record.cards) || record.cards.length >= MAX_ENTRIES) fail('명함 목록이 올바르지 않습니다.');
   const cards = record.cards.map(cardMetadata);
   if (new Set(cards.map(card => card.id)).size !== cards.length) fail('명함 ID가 중복되었습니다.');
-  return {
+  const result = {
     id: uuid(record.id), createdAt: timestamp(record.createdAt), updatedAt: timestamp(record.updatedAt),
     startAt, endAt, company: text(record.company, 200, '회사명').trim(),
     memo: text(record.memo, 5000, '메모'), team: text(record.team === undefined ? '' : record.team, 40, '기록 구분').trim(),
     visitType: record.visitType, cards,
   };
+  if (record.timeBasis !== undefined) {
+    if (record.timeBasis !== 'registered' || result.visitType !== 'visit' || result.startAt !== result.createdAt || result.endAt !== null) fail('방문 등록 시각 정보가 올바르지 않습니다.');
+    result.timeBasis = 'registered';
+  }
+  if (record.recordings !== undefined) {
+    if (!Array.isArray(record.recordings) || record.recordings.length > 1) fail('방문 녹음은 기록 하나에 파일 하나만 첨부할 수 있습니다.');
+    result.recordings = record.recordings.map(recordingMetadata);
+    if (result.recordings.length && result.visitType !== 'visit') fail('방문 기록에만 녹음을 첨부할 수 있습니다.');
+    if (result.recordings.some(audio => cards.some(card => card.id === audio.id))) fail('사진과 녹음의 ID가 같습니다.');
+  }
+  return result;
 }
 
 function validateRecords(records) {
@@ -74,14 +87,20 @@ function validateRecords(records) {
   const clean = records.map(validateRecord);
   if (new Set(clean.map(record => record.id)).size !== clean.length) fail('상담 ID가 중복되었습니다.');
   const references = new Map();
+  const recordingReferences = new Map();
   for (const record of clean) {
     for (const card of record.cards) {
       if (references.has(card.id)) fail('명함이 여러 상담에 중복 연결되었습니다.');
       references.set(card.id, { ...card, recordId: record.id });
     }
+    for (const audio of record.recordings || []) {
+      if (references.has(audio.id) || recordingReferences.has(audio.id)) fail('녹음 ID가 중복되었거나 사진 ID와 같습니다.');
+      recordingReferences.set(audio.id,{...audio,recordId:record.id});
+    }
   }
-  if (references.size + 1 > MAX_ENTRIES) fail('한 파일에는 최대 4,999장의 명함을 넣을 수 있습니다.');
-  return { records: clean, references };
+  if ([...recordingReferences.keys()].some(id => references.has(id))) fail('사진 ID와 녹음 ID가 같습니다.');
+  if (references.size + recordingReferences.size + 1 > MAX_ENTRIES) fail('한 파일에는 최대 4,999개의 사진·녹음을 넣을 수 있습니다.');
+  return { records: clean, references, recordingReferences };
 }
 
 function crc32(bytes) {
@@ -149,10 +168,12 @@ function zip(entries) {
   return new Blob([...local, ...central, end.bytes], { type: 'application/zip' });
 }
 
-export async function createBundle(records, cards) {
+export async function createBundle(records, cards, recordings = []) {
   const validated = validateRecords(records);
   if (!Array.isArray(cards) || cards.length !== validated.references.size) fail('상담에 연결된 명함 파일이 누락되었거나 불필요한 명함이 있습니다.');
-  const manifest = encoder.encode(JSON.stringify({ schemaVersion: 1, exportedAt: new Date().toISOString(), records: validated.records }));
+  if (!Array.isArray(recordings) || recordings.length !== validated.recordingReferences.size) fail('상담에 연결된 녹음 파일이 누락되었거나 불필요한 녹음이 있습니다.');
+  const version = validated.records.some(record => record.timeBasis !== undefined || record.recordings !== undefined) ? 2 : 1;
+  const manifest = encoder.encode(JSON.stringify({ schemaVersion: version, exportedAt: new Date().toISOString(), records: validated.records }));
   if (manifest.length > MAX_MANIFEST_BYTES) fail('상담 기록이 너무 큽니다. 날짜를 나눠 내보내세요.');
   let totalSize = manifest.length;
   const ids = new Set();
@@ -168,11 +189,23 @@ export async function createBundle(records, cards) {
     totalSize += card.blob.size + encoder.encode(metadata.path).length * 2 + 76;
     if (totalSize + 124 > MAX_BUNDLE_BYTES) fail('기록 묶음은 256MB를 넘을 수 없습니다. 날짜를 나눠 내보내세요.');
   }
+  for (const audio of recordings) {
+    const metadata = recordingMetadata(audio), reference = validated.recordingReferences.get(metadata.id);
+    if (!reference || ids.has(metadata.id) || reference.recordId !== audio.recordId || ['name','type','size','path'].some(key => reference[key] !== metadata[key])
+        || !(audio.blob instanceof Blob) || audio.blob.size !== metadata.size || audio.blob.type !== metadata.type) fail('녹음 파일과 상담의 연결 정보, 크기 또는 형식이 일치하지 않습니다.');
+    ids.add(metadata.id); totalSize += audio.blob.size + encoder.encode(metadata.path).length * 2 + 76;
+    if (totalSize + 124 > MAX_BUNDLE_BYTES) fail('녹음 포함 ZIP은 256MB를 넘을 수 없습니다. PC 자동 전송을 사용하고 녹음 원본도 별도로 보관하세요.');
+  }
   const entries = [{ name: 'manifest.json', bytes: manifest }];
   for (const card of cards) {
     const bytes = new Uint8Array(await card.blob.arrayBuffer());
     validateImage(bytes, card.type);
     entries.push({ name: card.path, bytes });
+  }
+  for (const audio of recordings) {
+    const bytes = new Uint8Array(await audio.blob.arrayBuffer());
+    validateRecordingHeader(bytes,audio.type);
+    entries.push({name:audio.path,bytes});
   }
   return zip(entries);
 }
@@ -202,7 +235,7 @@ function unzip(bytes) {
     const nameLength = u16(cursor + 28);
     range(cursor + 46, nameLength);
     const name = decoder.decode(bytes.subarray(cursor + 46, cursor + 46 + nameLength));
-    if (name !== 'manifest.json' && !/^cards\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png|webp)$/.test(name)) fail('ZIP 안에 허용되지 않는 파일 경로가 있습니다.');
+    if (name !== 'manifest.json' && !/^(cards\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png|webp)|recordings\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(m4a|mp3|wav|flac|ogg|webm))$/.test(name)) fail('ZIP 안에 허용되지 않는 파일 경로가 있습니다.');
     if (entries.has(name)) fail('ZIP 안에 중복된 파일이 있습니다.');
     if (size !== u32(cursor + 20)) fail('압축된 ZIP 파일은 지원하지 않습니다.');
     const start = u32(cursor + 42);
@@ -234,10 +267,11 @@ export async function readBundle(file) {
   try { manifest = JSON.parse(decoder.decode(manifestBytes)); }
   catch { fail('상담 목록 JSON을 읽을 수 없습니다.'); }
   object(manifest, '상담 목록');
-  if (manifest.schemaVersion !== 1) fail('지원하지 않는 기록 파일 버전입니다.');
+  if (![1,2].includes(manifest.schemaVersion)) fail('지원하지 않는 기록 파일 버전입니다.');
   timestamp(manifest.exportedAt);
-  const { records, references } = validateRecords(manifest.records);
-  if (entries.size !== references.size + 1) fail('ZIP의 명함 목록과 상담 기록이 일치하지 않습니다.');
+  const { records, references, recordingReferences } = validateRecords(manifest.records);
+  if (manifest.schemaVersion === 1 && records.some(record => record.timeBasis !== undefined || record.recordings !== undefined)) fail('기록 파일 버전과 녹음 정보가 일치하지 않습니다.');
+  if (entries.size !== references.size + recordingReferences.size + 1) fail('ZIP의 첨부 목록과 상담 기록이 일치하지 않습니다.');
   const cards = [];
   for (const metadata of references.values()) {
     const bytes = entries.get(metadata.path);
@@ -245,5 +279,13 @@ export async function readBundle(file) {
     validateImage(bytes, metadata.type);
     cards.push({ ...metadata, blob: new Blob([bytes], { type: metadata.type }) });
   }
-  return { records, cards };
+  if (manifest.schemaVersion === 1) return { records, cards };
+  const recordings = [];
+  for (const metadata of recordingReferences.values()) {
+    const bytes = entries.get(metadata.path);
+    if (!bytes || bytes.length !== metadata.size) fail('녹음 파일이 누락되었거나 크기가 일치하지 않습니다.');
+    validateRecordingHeader(bytes,metadata.type);
+    recordings.push({...metadata,blob:new Blob([bytes],{type:metadata.type})});
+  }
+  return {records,cards,recordings};
 }
