@@ -18,7 +18,7 @@ test('an empty cleared browser cannot overwrite its PC backup, and failed sends 
   sync.config = backupConfig(config); sync.schedule = ()=>{};
   sync.request = async()=>{posted++; throw new Error('offline');};
   await sync.send();
-  assert.equal(posted, 0); assert.match(status, /복원 가능/);
+  assert.equal(posted, 0); assert.match(status, /복원/); assert.doesNotMatch(status, /PC 연결됨/);
   const record = {id:config.deviceId, createdAt:'2026-10-19T01:00:00.000Z',updatedAt:'2026-10-19T01:00:00.000Z',
     startAt:'2026-10-19T01:00:00.000Z',endAt:null,company:'업체',memo:'',team:'',visitType:'booth',cards:[]};
   sync.snapshot = async()=>({records:[record],cards:[]});

@@ -57,7 +57,7 @@ export class FieldSync {
       const signature = JSON.stringify(snapshot.records);
       if (signature === this.signature) return;
       // An empty browser must restore its existing PC backup before replacing it.
-      if (!snapshot.records.length && this.signature === null) { this.status('PC 연결됨 · 기존 백업 복원 가능'); return; }
+      if (!snapshot.records.length && this.signature === null) { this.status('PC 연결 정보 저장됨 · 복원으로 백업 확인'); return; }
       this.status('PC로 백업 중…');
       const response = await this.request('POST', await createBundle(snapshot.records, snapshot.cards), revision);
       const result = await response.json();

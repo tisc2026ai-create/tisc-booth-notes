@@ -614,7 +614,7 @@ $('pc-backup-form').addEventListener('submit', event => {
   try {
     pcBackup.connect({url: $('backup-url').value.trim(), token: $('backup-token').value.trim(),
       label: $('backup-label').value.trim(), deviceId: $('backup-device').value || crypto.randomUUID()});
-    showBackupConfig(pcBackup.config); $('backup-message').textContent = 'PC 자동 백업을 연결했습니다. 전송 완료 여부는 상단에서 확인하세요.';
+    showBackupConfig(pcBackup.config); $('backup-message').textContent = 'PC 자동 백업 연결 정보를 저장했습니다. 전송 완료 여부는 상단에서 확인하세요.';
   } catch (error) { $('backup-message').textContent = error.message; }
 });
 $('backup-disconnect').addEventListener('click', () => { pcBackup.disconnect(); $('backup-message').textContent = 'PC의 기존 백업은 남겨 두고 이 기기의 자동 전송만 중지했습니다.'; });
