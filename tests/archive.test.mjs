@@ -67,6 +67,20 @@ test('empty exports and unfinished consultations remain usable', async () => {
   assert.deepEqual((await readBundle(await createBundle([draft], []))).records, [draft]);
 });
 
+test('photo purpose and description survive ZIP transfer without changing legacy metadata', async () => {
+  for (const kind of ['card', 'badge', 'product', 'booth', 'other']) {
+    const metadata = {...photo, kind, caption: '확인할 제품 표시'};
+    const source = record({cards: [metadata]});
+    const restored = await readBundle(await createBundle([source], [card(metadata)]));
+    assert.deepEqual(restored.records, [source]);
+    assert.equal(restored.cards[0].kind, kind);
+    assert.equal(restored.cards[0].caption, metadata.caption);
+  }
+  assert.throws(() => validateRecord(record({cards: [{...photo, kind: 'invalid'}]})), /용도/);
+  assert.throws(() => validateRecord(record({cards: [{...photo, caption: '가'.repeat(2001)}]})), /설명/);
+  await assert.rejects(createBundle([record({cards: [{...photo, kind:'badge'}]})], [card()]), /연결/);
+});
+
 test('new records with no team and legacy team values both survive ZIP round trips', async () => {
   for (const team of ['', '1조', '2조']) {
     const source = record({ team, cards: [] });

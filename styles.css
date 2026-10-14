@@ -167,3 +167,9 @@ dialog img{display:block;max-width:100%;max-height:75vh;object-fit:contain}
  footer{display:block;padding:28px 0;font-size:11px}footer p{margin-top:8px}
 }
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
+
+.photo-details{padding:6px;font-size:12px}.photo-details summary{cursor:pointer}.photo-details label{display:block;margin-top:8px}.photo-details select,.photo-details textarea{width:100%;min-width:0}.photo-details button{margin-top:8px}
+
+.backup-setup{max-width:760px;margin:28px auto;padding:20px;background:#f7f7f7;border-radius:12px}.backup-setup label{display:block;margin:12px 0}.backup-setup input{width:100%}.backup-setup p{font-size:13px;line-height:1.6}.header-right{flex-wrap:wrap}#pc-backup-status{max-width:260px}
+
+@media(max-width:640px){body:not([data-view="transfer"]) .backup-setup{display:none}}

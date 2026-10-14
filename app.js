@@ -1,5 +1,6 @@
 import { createBundle, readBundle, validateRecord } from './archive.js';
 import { openStorage, getRecords, getCards, saveRecord, saveCard, deleteCard, deleteRecords, importRecords } from './storage.js';
+import {FieldSync, backupConfig} from './field-sync.js';
 
 const $ = id => document.getElementById(id);
 const records = new Map();
@@ -16,10 +17,12 @@ let saveTimer;
 let saveError = null;
 let dialogUrl = null;
 let pendingDelete = null;
-let defaultVisit = 'booth';
-try {
-  defaultVisit = localStorage.getItem('tisc-visit') === 'visit' ? 'visit' : 'booth';
-} catch { /* 설정 저장이 차단되어도 상담은 IndexedDB에 저장합니다. */ }
+const PHOTO_KINDS = {card: '명함', badge: '명찰', product: '제품', booth: '부스·현장', other: '기타'};
+const pcBackup = new FieldSync(async () => {
+  const [savedRecords, savedCards] = await Promise.all([getRecords(), getCards()]);
+  savedRecords.sort((a, b) => a.id.localeCompare(b.id));
+  return {records: savedRecords, cards: savedCards};
+}, text => { $('pc-backup-status').textContent = text; });
 
 function kstDate(value = new Date()) {
   return new Date(new Date(value).getTime() + KST).toISOString().slice(0, 10);
@@ -81,7 +84,7 @@ function updateStatus() {
 }
 function syncControls() {
   const locked = !ready || busy;
-  for (const id of ['visit-type', 'company', 'memo', 'manual-start', 'manual-end', 'card-file', 'gallery-file', 'toggle-times', 'save-times', 'end-record', 'next-record', 'new-record', 'add-consultation', 'show-records', 'show-editor', 'show-transfer', 'retry-save', 'import-file']) $(id).disabled = locked;
+  for (const id of ['company', 'memo', 'manual-start', 'manual-end', 'card-file', 'gallery-file', 'photo-kind', 'photo-caption', 'toggle-times', 'save-times', 'end-record', 'next-record', 'new-record', 'add-consultation', 'show-records', 'show-editor', 'show-transfer', 'retry-save', 'import-file']) $(id).disabled = locked;
   $('delete-record').disabled = locked || !current();
   $('delete-confirm').disabled = locked || !pendingDelete;
   $('delete-cancel').disabled = busy;
@@ -121,6 +124,7 @@ async function flushPending() {
   } finally {
     saving = null;
     updateStatus();
+    pcBackup.schedule();
   }
 }
 function edit(fields) {
@@ -150,6 +154,7 @@ async function action(task, allowDraftExport = false) {
   } finally {
     busy = false;
     syncControls();
+    pcBackup.schedule();
   }
 }
 
@@ -179,7 +184,7 @@ function renderList() {
   const activeCount = all.filter(record => record.endAt === null).length;
   $('active-count').textContent = `진행 중 ${activeCount}건`;
   $('new-record').textContent = activeCount ? '+ 다른 상담 추가' : '+ 새 상담';
-  $('export-summary').textContent = `${day || '모든 날짜'} · 상담 ${dated.length}건 · 진행 중 ${dated.filter(record => record.endAt === null).length}건 포함 · 명함·명찰 ${dated.reduce((count, record) => count + record.cards.length, 0)}장`;
+  $('export-summary').textContent = `${day || '모든 날짜'} · 상담 ${dated.length}건 · 진행 중 ${dated.filter(record => record.endAt === null).length}건 포함 · 사진 ${dated.reduce((count, record) => count + record.cards.length, 0)}장`;
   $('active-sessions').replaceChildren();
   if (current()) {
     for (const record of all.filter(record => record.id !== selectedId && record.endAt === null)) {
@@ -209,8 +214,8 @@ function renderList() {
     const row = node('div', 'record-row');
     row.append(node('span', 'record-company', record.company || '회사명 미입력'));
     row.append(node('span', `record-state${record.endAt === null ? ' active' : ''}`, dirty.has(record.id) ? '저장 대기' : record.endAt === null ? '진행 중' : '기록 완료'));
-    const time = `${!day ? `${kstDate(record.startAt)} · ` : ''}${kstTime(record.startAt)} — ${record.endAt ? kstTime(record.endAt) : '진행 중'} · 명함 ${record.cards.length}장`;
-    button.append(row, node('div', 'record-time', time), node('div', 'record-memo', `${record.visitType === 'visit' ? '다른 부스 방문' : '우리 부스 상담'}${record.memo ? ` · ${record.memo.replace(/\s+/g, ' ')}` : ''}`));
+    const time = `${!day ? `${kstDate(record.startAt)} · ` : ''}${kstTime(record.startAt)} — ${record.endAt ? kstTime(record.endAt) : '진행 중'} · 사진 ${record.cards.length}장`;
+    button.append(row, node('div', 'record-time', time), node('div', 'record-memo', `${record.visitType === 'visit' ? '이전 기록' : '우리 부스 상담'}${record.memo ? ` · ${record.memo.replace(/\s+/g, ' ')}` : ''}`));
     button.addEventListener('click', () => action(async () => { selectedId = record.id; renderSelected(); setView('editor'); }));
     container.append(button);
   }
@@ -246,7 +251,7 @@ function renderCards() {
     remove.disabled = busy;
     remove.setAttribute('aria-label', `${metadata.name} 삭제`);
     remove.addEventListener('click', () => {
-      if (!confirm('이 상담에서 명함 사진을 삭제할까요? 내보내지 않은 사진은 복구할 수 없습니다.')) return;
+      if (!confirm('이 상담에서 사진을 삭제할까요? 내보내지 않은 사진은 복구할 수 없습니다.')) return;
       action(async () => {
         const latest = current();
         const next = { ...latest, updatedAt: revision(latest), cards: latest.cards.filter(item => item.id !== metadata.id) };
@@ -256,10 +261,27 @@ function renderCards() {
         cards.delete(metadata.id);
         renderCards();
         renderList();
-        message('명함 사진을 삭제했습니다.');
+        message('사진을 삭제했습니다.');
       });
     });
-    tile.append(open, node('span', 'card-name', metadata.name), remove);
+    const details = node('details', 'photo-details');
+    details.append(node('summary', '', `${PHOTO_KINDS[metadata.kind || 'card']} · 설명 수정`));
+    const kindLabel = node('label', '', '사진 용도'), kind = node('select');
+    for (const [value, label] of Object.entries(PHOTO_KINDS)) kind.append(new Option(label, value));
+    kind.value = metadata.kind || 'card'; kindLabel.append(kind);
+    const captionLabel = node('label', '', '사진 설명'), caption = node('textarea');
+    caption.rows = 2; caption.maxLength = 2000; caption.value = metadata.caption || ''; captionLabel.append(caption);
+    const save = node('button', 'button button-small button-outline', '사진 정보 저장'); save.type = 'button';
+    save.addEventListener('click', () => action(async () => {
+      const latest = current(), previous = cards.get(metadata.id);
+      const updated = {...latest.cards.find(item => item.id === metadata.id), kind: kind.value, caption: caption.value.trim()};
+      const next = {...latest, updatedAt: revision(latest), cards: latest.cards.map(item => item.id === metadata.id ? updated : item)};
+      await saveCard(next, {...previous, ...updated}, persistedRevision.get(next.id) ?? null);
+      persistedRevision.set(next.id, next.updatedAt); records.set(next.id, next); cards.set(metadata.id, {...previous, ...updated});
+      renderCards(); renderList(); message('사진 용도와 설명을 저장했습니다.');
+    }));
+    details.append(kindLabel, captionLabel, save);
+    tile.append(open, node('span', 'card-name', metadata.name), details, remove);
     $('cards').append(tile);
   }
 }
@@ -277,7 +299,6 @@ function renderSelected() {
   $('time-editor').hidden = true;
   $('toggle-times').setAttribute('aria-expanded', 'false');
   $('editor-heading').textContent = record ? record.company || '회사명 미입력' : '새 상담';
-  $('visit-type').value = record ? record.visitType : defaultVisit;
   if (record) {
     $('company').value = record.company;
     $('memo').value = record.memo;
@@ -298,7 +319,6 @@ function renderSelected() {
 }
 
 $('filter-date').value = kstDate();
-$('visit-type').value = defaultVisit;
 setView('records');
 for (const view of ['records', 'editor', 'transfer']) {
   $(`show-${view}`).addEventListener('click', () => action(async () => { setView(view); }));
@@ -309,16 +329,10 @@ $('all-dates').addEventListener('click', () => { $('filter-date').value = ''; re
 $('record-form').addEventListener('submit', event => event.preventDefault());
 $('company').addEventListener('input', () => { edit({ company: $('company').value }); $('editor-heading').textContent = $('company').value || '회사명 미입력'; });
 $('memo').addEventListener('input', () => edit({ memo: $('memo').value }));
-$('visit-type').addEventListener('change', () => {
-  defaultVisit = $('visit-type').value;
-  try { localStorage.setItem('tisc-visit', defaultVisit); } catch { /* 기기 설정만 선택적으로 보관합니다. */ }
-  edit({ visitType: defaultVisit });
-});
 function startConsultation() {
   const clickedAt = new Date().toISOString();
-  const visitType = $('visit-type').value;
   action(async () => {
-    const record = { id: crypto.randomUUID(), createdAt: clickedAt, updatedAt: clickedAt, startAt: clickedAt, endAt: null, company: '', memo: '', team: '', visitType, cards: [] };
+    const record = { id: crypto.randomUUID(), createdAt: clickedAt, updatedAt: clickedAt, startAt: clickedAt, endAt: null, company: '', memo: '', team: '', visitType: 'booth', cards: [] };
     await saveRecord(record, null);
     persistedRevision.set(record.id, record.updatedAt);
     records.set(record.id, record);
@@ -378,14 +392,14 @@ $('delete-record').addEventListener('click', () => {
     const saved = current();
     pendingDelete = { id: saved.id, updatedAt: persistedRevision.get(saved.id) };
     $('delete-name').textContent = `${saved.company || '회사명 미입력'} · ${kstTime(saved.startAt, true)}`;
-    $('delete-counts').textContent = `상담 기록 1건 · 명함·명찰 사진 ${[...cards.values()].filter(card => card.recordId === saved.id).length}장${saved.endAt === null ? ' · 진행 중인 상담' : ''}`;
+    $('delete-counts').textContent = `상담 기록 1건 · 첨부 사진 ${[...cards.values()].filter(card => card.recordId === saved.id).length}장${saved.endAt === null ? ' · 진행 중인 상담' : ''}`;
     $('delete-error').hidden = true;
     $('delete-dialog').showModal();
   }).then(() => { if ($('delete-dialog').open) $('delete-cancel').focus(); });
 });
 $('delete-cancel').addEventListener('click', () => { if (!busy) $('delete-dialog').close(); });
 $('delete-dialog').addEventListener('cancel', event => { if (busy) event.preventDefault(); });
-$('delete-dialog').addEventListener('close', () => { pendingDelete = null; syncControls(); });
+$('delete-dialog').addEventListener('close', () => { if (!$('delete-dialog').open) pendingDelete = null; syncControls(); });
 $('delete-confirm').addEventListener('click', async () => {
   if (!pendingDelete) return;
   await action(async () => {
@@ -469,7 +483,7 @@ for (const inputId of ['card-file', 'gallery-file']) $(inputId).addEventListener
     for (const file of files) {
       const blob = await compressedImage(file);
       const id = crypto.randomUUID();
-      const metadata = { id, name: file.name.slice(0, 255), type: blob.type, size: blob.size, path: `cards/${id}.jpg` };
+      const metadata = { id, name: file.name.slice(0, 255), type: blob.type, size: blob.size, path: `cards/${id}.jpg`, kind: $('photo-kind').value, caption: $('photo-caption').value.trim() };
       const record = current();
       const next = { ...record, updatedAt: revision(record), cards: [...record.cards, metadata] };
       const card = { ...metadata, recordId: record.id, blob };
@@ -480,7 +494,7 @@ for (const inputId of ['card-file', 'gallery-file']) $(inputId).addEventListener
       count++;
       renderCards();
       renderList();
-      message(`명함 ${count}장을 기기에 저장했습니다. 확대해서 글씨를 확인해 주세요.`);
+      message(`사진 ${count}장을 기기에 저장했습니다. 확대해서 내용을 확인해 주세요.`);
     }
   }).finally(() => { input.value = ''; });
 });
@@ -511,7 +525,7 @@ function exportRecords(allDates) {
     const stamp = kstInput(new Date().toISOString()).replace(/[:T]/g, '-');
     const filename = `tisc-notes-${day || 'all'}-${stamp}.zip`;
     download(blob, filename);
-    message(`${selected.length}건과 명함 ${attached.length}장의 다운로드를 요청했습니다.${dirty.size ? ' 기기 저장에 실패한 수정본이 포함되어 있습니다.' : ''} 파일이 실제로 저장되었는지 확인한 뒤 분석 PC나 별도 보관 위치로 옮겨 주세요.`, 'warning');
+    message(`${selected.length}건과 사진 ${attached.length}장의 다운로드를 요청했습니다.${dirty.size ? ' 기기 저장에 실패한 수정본이 포함되어 있습니다.' : ''} 파일이 실제로 저장되었는지 확인한 뒤 분석 PC나 별도 보관 위치로 옮겨 주세요.`, 'warning');
   }, true);
 }
 $('export-date').addEventListener('click', () => exportRecords(false));
@@ -521,7 +535,7 @@ $('import-file').addEventListener('change', () => {
   if (!file) return;
   action(async () => {
     const bundle = await readBundle(file);
-    if (!confirm(`상담 ${bundle.records.length}건과 명함 ${bundle.cards.length}장을 가져올까요? 같은 상담은 최신 수정본을 사용하며, 같은 수정 시각의 충돌은 가져오지 않습니다.`)) return;
+    if (!confirm(`상담 ${bundle.records.length}건과 사진 ${bundle.cards.length}장을 가져올까요? 같은 상담은 최신 수정본을 사용하며, 같은 수정 시각의 충돌은 가져오지 않습니다.`)) return;
     const result = await importRecords(bundle);
     await reloadData();
     $('filter-date').value = '';
@@ -580,4 +594,36 @@ try {
   syncControls();
   renderList();
 }
+function showBackupConfig(config) {
+  if (!config) return;
+  $('backup-url').value = config.url; $('backup-label').value = config.label;
+  $('backup-token').value = config.token; $('backup-device').value = config.deviceId;
+}
+showBackupConfig(pcBackup.config);
+try {
+  const paired = new URLSearchParams(location.hash.slice(1)).get('backup');
+  if (paired) {
+    showBackupConfig(backupConfig(JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(paired), char => char.charCodeAt(0))))));
+    history.replaceState(null, '', location.pathname + location.search);
+    $('backup-message').textContent = 'PC 주소를 확인한 뒤 백업 연결을 눌러 주세요.';
+    setView('transfer'); document.querySelector('.backup-setup').scrollIntoView();
+  }
+} catch { $('backup-message').textContent = '연결 링크가 올바르지 않습니다. PC에서 다시 받아 주세요.'; }
+$('pc-backup-form').addEventListener('submit', event => {
+  event.preventDefault();
+  try {
+    pcBackup.connect({url: $('backup-url').value.trim(), token: $('backup-token').value.trim(),
+      label: $('backup-label').value.trim(), deviceId: $('backup-device').value || crypto.randomUUID()});
+    showBackupConfig(pcBackup.config); $('backup-message').textContent = 'PC 자동 백업을 연결했습니다. 전송 완료 여부는 상단에서 확인하세요.';
+  } catch (error) { $('backup-message').textContent = error.message; }
+});
+$('backup-disconnect').addEventListener('click', () => { pcBackup.disconnect(); $('backup-message').textContent = 'PC의 기존 백업은 남겨 두고 이 기기의 자동 전송만 중지했습니다.'; });
+$('backup-restore').addEventListener('click', () => action(async () => {
+  const bundle = await pcBackup.restore();
+  if (!confirm(`PC에 보관한 상담 ${bundle.records.length}건과 사진 ${bundle.cards.length}장을 복원할까요? 같은 기록은 최신 수정본을 유지합니다.`)) return;
+  await importRecords(bundle); await reloadData(); selectedId = null; renderSelected();
+  $('backup-message').textContent = 'PC 백업을 이 브라우저에 복원했습니다.';
+}));
+window.addEventListener('online', () => pcBackup.schedule(0));
+if (ready) pcBackup.schedule();
 offlineSetup();

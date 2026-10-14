@@ -43,7 +43,13 @@ function cardMetadata(card) {
   const path = `cards/${id}.${extensions[card.type]}`;
   if (card.path !== path) fail('명함 파일 경로가 올바르지 않습니다.');
   if (!Number.isSafeInteger(card.size) || card.size <= 0 || card.size > MAX_BUNDLE_BYTES) fail('명함 파일 크기가 올바르지 않습니다.');
-  return { id, name: text(card.name, 255, '명함 이름'), type: card.type, size: card.size, path };
+  const result = { id, name: text(card.name, 255, '명함 이름'), type: card.type, size: card.size, path };
+  if (card.kind !== undefined) {
+    if (!['card', 'badge', 'product', 'booth', 'other'].includes(card.kind)) fail('사진 용도가 올바르지 않습니다.');
+    result.kind = card.kind;
+  }
+  if (card.caption !== undefined) result.caption = text(card.caption, 2000, '사진 설명');
+  return result;
 }
 
 export function validateRecord(record) {
@@ -154,7 +160,7 @@ export async function createBundle(records, cards) {
     const metadata = cardMetadata(card);
     const reference = validated.references.get(metadata.id);
     if (!reference || ids.has(metadata.id) || reference.recordId !== card.recordId
-        || ['name', 'type', 'size', 'path'].some(key => reference[key] !== metadata[key])) {
+        || ['name', 'type', 'size', 'path', 'kind', 'caption'].some(key => reference[key] !== metadata[key])) {
       fail('명함 파일과 상담의 연결 정보가 일치하지 않습니다.');
     }
     if (!(card.blob instanceof Blob) || card.blob.size !== metadata.size || card.blob.type !== metadata.type) fail('명함 파일의 크기 또는 형식이 일치하지 않습니다.');

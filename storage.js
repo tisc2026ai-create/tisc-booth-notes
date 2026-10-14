@@ -2,7 +2,7 @@ import { validateRecord } from './archive.js';
 
 let database = null;
 let opening = null;
-const metadataKeys = ['id', 'name', 'type', 'size', 'path'];
+const metadataKeys = ['id', 'name', 'type', 'size', 'path', 'kind', 'caption'];
 
 function storageError(error) {
   if (error?.name === 'QuotaExceededError') return new Error('기기 저장 공간이 부족합니다. 기록을 내보내 백업한 뒤 공간을 확보해 주세요.');

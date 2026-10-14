@@ -79,6 +79,7 @@ try {
   await eventually('document.readyState === "complete" && document.body.innerText.includes("TiSC")');
   assert.equal(await evaluate('document.querySelector("h1").innerText.trim()'),'현장 상담 기록');
   assert.equal(await evaluate('document.querySelector("#team")'),null,'The recorder must not ask users to choose a team');
+  assert.equal(await evaluate('document.querySelector("#visit-type")'),null,'The field recorder must focus on our booth without a visit-type selector');
   assert.equal(await evaluate(`(async()=>{
     const {overlappingRecords}=await import('./app.js');
     const old={id:'old-1',team:'1조',startAt:'2026-10-19T01:00:00Z',endAt:'2026-10-19T01:05:00Z'};
@@ -95,6 +96,7 @@ try {
     const photo = {id:cardId, name:'test-card.png', type:blob.type, size:blob.size, path:'cards/'+cardId+'.png'};
     const now = new Date().toISOString();
     localStorage.setItem('tisc-team','99조');
+    localStorage.setItem('tisc-visit','visit');
     const record = {id,createdAt:now,updatedAt:now,startAt:now,endAt:null,company:'브라우저 검증 회사',memo:'<img src=x onerror=alert(1)>',team:'검증 1조',visitType:'booth',cards:[]};
     await db.saveRecord(record);
     record.cards=[photo]; record.updatedAt=new Date(Date.parse(now)+1).toISOString();
@@ -169,6 +171,7 @@ try {
   })()`);
   await eventually('(async()=>{const db=await import("./storage.js");return (await db.getRecords()).some(r=>r.company==="실제 버튼 상담" && r.memo.includes("현장 시연 요청"));})()');
   assert.equal(await evaluate('(async()=>{const db=await import("./storage.js");return (await db.getRecords()).find(r=>r.company==="실제 버튼 상담").team;})()'),'','New consultations must ignore any old saved team preference');
+  assert.equal(await evaluate('(async()=>{const db=await import("./storage.js");return (await db.getRecords()).find(r=>r.company==="실제 버튼 상담").visitType;})()'),'booth','Old visit preferences must not create new external-visit field records');
   assert.ok(await evaluate('document.querySelector("#overlap-warning").textContent.includes("브라우저 검증 회사")'),'A new consultation must see overlapping legacy records regardless of old team labels');
   const pngPath=join(scratch,'test-card.png');
   await writeFile(pngPath,Buffer.from(fixture.png,'base64'));
@@ -176,8 +179,12 @@ try {
   assert.equal(await evaluate('document.querySelector("#card-file").getAttribute("capture")'),'environment');
   assert.equal(await evaluate('document.querySelector("#gallery-file").hasAttribute("capture")'),false);
   const fileInput=await send('DOM.querySelector',{nodeId:dom.root.nodeId,selector:'#gallery-file'});
+  await evaluate('document.querySelector("#photo-kind").value="badge";document.querySelector("#photo-caption").value="현장 담당자 명찰"');
   await send('DOM.setFileInputFiles',{nodeId:fileInput.nodeId,files:[pngPath]});
   await eventually('(async()=>{const db=await import("./storage.js");return (await db.getRecords()).some(r=>r.company==="실제 버튼 상담" && r.cards.length===1);})()');
+  await eventually('!document.querySelector("#new-record").disabled');
+  await evaluate('document.querySelector(".photo-details select").value="product";document.querySelector(".photo-details textarea").value="현장에서 확인한 제품";document.querySelector(".photo-details button").click()');
+  await eventually('(async()=>{const db=await import("./storage.js");const r=(await db.getRecords()).find(r=>r.company==="실제 버튼 상담");return r.cards[0].kind==="product" && r.cards[0].caption==="현장에서 확인한 제품";})()');
   await eventually('!document.querySelector("#new-record").disabled');
   await evaluate(`(() => {
     const memo=document.querySelector('#memo');memo.value+=' · 다른 상담 추가 직전 수정';memo.dispatchEvent(new Event('input',{bubbles:true}));
@@ -213,6 +220,22 @@ try {
   assert.equal(await evaluate('(async()=>{const db=await import("./storage.js");return (await db.getRecords()).length;})()'),3,'A failed save must not create another consultation');
   await evaluate('IDBDatabase.prototype.transaction=window.originalIdbTransaction;delete window.originalIdbTransaction;document.querySelector("#retry-save").click();');
   await eventually('document.querySelector("#save-status").textContent.includes("기기에 저장됨")');
+  assert.ok(await evaluate(`(async()=>{
+    const {FieldSync}=await import('./field-sync.js'), db=await import('./storage.js');
+    const records=await db.getRecords(), cards=await db.getCards();
+    const originalFetch=window.fetch;let saved=null,authorization='';
+    window.fetch=async(_url,options)=>{authorization=options.headers.Authorization;
+      if(options.method==='POST'){saved=options.body;return new Response(JSON.stringify({records:records.length,savedAt:new Date().toISOString()}),{status:200});}
+      return new Response(saved,{status:200,headers:{'Content-Type':'application/zip'}});
+    };
+    try{
+      const sync=new FieldSync(async()=>({records,cards}),()=>{});sync.schedule=()=>{};
+      sync.config={url:'https://backup.example.ts.net',token:'x'.repeat(43),deviceId:crypto.randomUUID(),label:'검증 기기'};
+      await sync.send();const restored=await sync.restore();
+      return authorization==='Bearer '+'x'.repeat(43) && JSON.stringify(restored.records)===JSON.stringify(records)
+        && restored.cards.length===cards.length && restored.cards.some(photo=>photo.kind==='product'&&photo.caption==='현장에서 확인한 제품');
+    }finally{window.fetch=originalFetch;}
+  })()`),'Authenticated PC backup and restore must preserve record revisions, photo purpose and descriptions');
   await evaluate('document.querySelector(".other-session").click()');
   await eventually('document.querySelector("#company").value === "갑작스러운 문의 회사" && !document.querySelector("#end-record").disabled');
   await eventually('!document.querySelector("#end-record").disabled');
