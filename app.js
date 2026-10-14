@@ -16,10 +16,8 @@ let saveTimer;
 let saveError = null;
 let dialogUrl = null;
 let pendingDelete = null;
-let defaultTeam = '1조';
 let defaultVisit = 'booth';
 try {
-  defaultTeam = localStorage.getItem('tisc-team') || '1조';
   defaultVisit = localStorage.getItem('tisc-visit') === 'visit' ? 'visit' : 'booth';
 } catch { /* 설정 저장이 차단되어도 상담은 IndexedDB에 저장합니다. */ }
 
@@ -83,7 +81,7 @@ function updateStatus() {
 }
 function syncControls() {
   const locked = !ready || busy;
-  for (const id of ['team', 'visit-type', 'company', 'memo', 'manual-start', 'manual-end', 'card-file', 'gallery-file', 'toggle-times', 'save-times', 'end-record', 'next-record', 'new-record', 'add-consultation', 'show-records', 'show-editor', 'show-transfer', 'retry-save', 'import-file']) $(id).disabled = locked;
+  for (const id of ['visit-type', 'company', 'memo', 'manual-start', 'manual-end', 'card-file', 'gallery-file', 'toggle-times', 'save-times', 'end-record', 'next-record', 'new-record', 'add-consultation', 'show-records', 'show-editor', 'show-transfer', 'retry-save', 'import-file']) $(id).disabled = locked;
   $('delete-record').disabled = locked || !current();
   $('delete-confirm').disabled = locked || !pendingDelete;
   $('delete-cancel').disabled = busy;
@@ -159,7 +157,7 @@ export function overlappingRecords(selected, candidates) {
   if (!selected) return [];
   const start = Date.parse(selected.startAt);
   const end = selected.endAt === null ? Infinity : Date.parse(selected.endAt);
-  return [...candidates].filter(record => record.id !== selected.id && record.team.trim() === selected.team.trim()
+  return [...candidates].filter(record => record.id !== selected.id
     && Math.max(start, Date.parse(record.startAt)) < Math.min(end, record.endAt === null ? Infinity : Date.parse(record.endAt)));
 }
 function renderOverlap() {
@@ -176,7 +174,7 @@ function renderList() {
   const day = $('filter-date').value;
   const all = [...records.values()].sort((a, b) => Number(a.endAt !== null) - Number(b.endAt !== null) || b.startAt.localeCompare(a.startAt));
   const dated = all.filter(record => !day || kstDate(record.startAt) === day);
-  const visible = dated.filter(record => !query || `${record.company} ${record.memo} ${record.team}`.toLocaleLowerCase('ko-KR').includes(query));
+  const visible = dated.filter(record => !query || `${record.company} ${record.memo}`.toLocaleLowerCase('ko-KR').includes(query));
   $('record-count').textContent = visible.length;
   const activeCount = all.filter(record => record.endAt === null).length;
   $('active-count').textContent = `진행 중 ${activeCount}건`;
@@ -185,7 +183,7 @@ function renderList() {
   $('active-sessions').replaceChildren();
   if (current()) {
     for (const record of all.filter(record => record.id !== selectedId && record.endAt === null)) {
-      const button = node('button', 'other-session', `${record.company || '회사명 미입력'} · ${record.team || '조 미지정'} · ${kstTime(record.startAt, true)}부터 · 기록 전환`);
+      const button = node('button', 'other-session', `${record.company || '회사명 미입력'} · ${kstTime(record.startAt, true)}부터 · 기록 전환`);
       button.type = 'button';
       button.dataset.id = record.id;
       button.disabled = !ready || busy;
@@ -211,7 +209,7 @@ function renderList() {
     const row = node('div', 'record-row');
     row.append(node('span', 'record-company', record.company || '회사명 미입력'));
     row.append(node('span', `record-state${record.endAt === null ? ' active' : ''}`, dirty.has(record.id) ? '저장 대기' : record.endAt === null ? '진행 중' : '기록 완료'));
-    const time = `${!day ? `${kstDate(record.startAt)} · ` : ''}${kstTime(record.startAt)} — ${record.endAt ? kstTime(record.endAt) : '진행 중'} · ${record.team || '조 미지정'} · 명함 ${record.cards.length}장`;
+    const time = `${!day ? `${kstDate(record.startAt)} · ` : ''}${kstTime(record.startAt)} — ${record.endAt ? kstTime(record.endAt) : '진행 중'} · 명함 ${record.cards.length}장`;
     button.append(row, node('div', 'record-time', time), node('div', 'record-memo', `${record.visitType === 'visit' ? '다른 부스 방문' : '우리 부스 상담'}${record.memo ? ` · ${record.memo.replace(/\s+/g, ' ')}` : ''}`));
     button.addEventListener('click', () => action(async () => { selectedId = record.id; renderSelected(); setView('editor'); }));
     container.append(button);
@@ -279,7 +277,6 @@ function renderSelected() {
   $('time-editor').hidden = true;
   $('toggle-times').setAttribute('aria-expanded', 'false');
   $('editor-heading').textContent = record ? record.company || '회사명 미입력' : '새 상담';
-  $('team').value = record ? record.team : defaultTeam;
   $('visit-type').value = record ? record.visitType : defaultVisit;
   if (record) {
     $('company').value = record.company;
@@ -301,7 +298,6 @@ function renderSelected() {
 }
 
 $('filter-date').value = kstDate();
-$('team').value = defaultTeam;
 $('visit-type').value = defaultVisit;
 setView('records');
 for (const view of ['records', 'editor', 'transfer']) {
@@ -313,11 +309,6 @@ $('all-dates').addEventListener('click', () => { $('filter-date').value = ''; re
 $('record-form').addEventListener('submit', event => event.preventDefault());
 $('company').addEventListener('input', () => { edit({ company: $('company').value }); $('editor-heading').textContent = $('company').value || '회사명 미입력'; });
 $('memo').addEventListener('input', () => edit({ memo: $('memo').value }));
-$('team').addEventListener('input', () => {
-  defaultTeam = $('team').value;
-  try { localStorage.setItem('tisc-team', defaultTeam); } catch { /* 기기 설정만 선택적으로 보관합니다. */ }
-  edit({ team: defaultTeam });
-});
 $('visit-type').addEventListener('change', () => {
   defaultVisit = $('visit-type').value;
   try { localStorage.setItem('tisc-visit', defaultVisit); } catch { /* 기기 설정만 선택적으로 보관합니다. */ }
@@ -325,10 +316,9 @@ $('visit-type').addEventListener('change', () => {
 });
 function startConsultation() {
   const clickedAt = new Date().toISOString();
-  const team = $('team').value;
   const visitType = $('visit-type').value;
   action(async () => {
-    const record = { id: crypto.randomUUID(), createdAt: clickedAt, updatedAt: clickedAt, startAt: clickedAt, endAt: null, company: '', memo: '', team, visitType, cards: [] };
+    const record = { id: crypto.randomUUID(), createdAt: clickedAt, updatedAt: clickedAt, startAt: clickedAt, endAt: null, company: '', memo: '', team: '', visitType, cards: [] };
     await saveRecord(record, null);
     persistedRevision.set(record.id, record.updatedAt);
     records.set(record.id, record);
@@ -387,7 +377,7 @@ $('delete-record').addEventListener('click', () => {
   action(async () => {
     const saved = current();
     pendingDelete = { id: saved.id, updatedAt: persistedRevision.get(saved.id) };
-    $('delete-name').textContent = `${saved.company || '회사명 미입력'} · ${saved.team || '조 미지정'} · ${kstTime(saved.startAt, true)}`;
+    $('delete-name').textContent = `${saved.company || '회사명 미입력'} · ${kstTime(saved.startAt, true)}`;
     $('delete-counts').textContent = `상담 기록 1건 · 명함·명찰 사진 ${[...cards.values()].filter(card => card.recordId === saved.id).length}장${saved.endAt === null ? ' · 진행 중인 상담' : ''}`;
     $('delete-error').hidden = true;
     $('delete-dialog').showModal();

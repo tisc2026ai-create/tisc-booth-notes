@@ -67,6 +67,13 @@ test('empty exports and unfinished consultations remain usable', async () => {
   assert.deepEqual((await readBundle(await createBundle([draft], []))).records, [draft]);
 });
 
+test('new records with no team and legacy team values both survive ZIP round trips', async () => {
+  for (const team of ['', '1조', '2조']) {
+    const source = record({ team, cards: [] });
+    assert.deepEqual((await readBundle(await createBundle([source], []))).records, [source]);
+  }
+});
+
 test('record validation rejects impossible dates, reversed times and oversized strings', () => {
   assert.throws(() => validateRecord(record({ startAt: '2026-02-30T01:17:00.000Z' })), /날짜/);
   assert.throws(() => validateRecord(record({ endAt: '2026-10-19T01:16:59.000Z' })), /종료/);

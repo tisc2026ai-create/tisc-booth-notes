@@ -78,6 +78,12 @@ try {
   }
   await eventually('document.readyState === "complete" && document.body.innerText.includes("TiSC")');
   assert.equal(await evaluate('document.querySelector("h1").innerText.trim()'),'현장 상담 기록');
+  assert.equal(await evaluate('document.querySelector("#team")'),null,'The recorder must not ask users to choose a team');
+  assert.equal(await evaluate(`(async()=>{
+    const {overlappingRecords}=await import('./app.js');
+    const old={id:'old-1',team:'1조',startAt:'2026-10-19T01:00:00Z',endAt:'2026-10-19T01:05:00Z'};
+    return overlappingRecords(old,[{...old,id:'old-2',team:'2조'},{...old,id:'adjacent',team:'3조',startAt:old.endAt}]).map(record=>record.id).join(',');
+  })()`),'old-2','Legacy team names must not suppress actual time overlaps or invent adjacent ones');
   const fixture = await evaluate(`(async () => {
     const db = await import('./storage.js'); const archive = await import('./archive.js');
     await db.openStorage();
@@ -88,6 +94,7 @@ try {
     const blob = await new Promise(done => canvas.toBlob(done, 'image/png'));
     const photo = {id:cardId, name:'test-card.png', type:blob.type, size:blob.size, path:'cards/'+cardId+'.png'};
     const now = new Date().toISOString();
+    localStorage.setItem('tisc-team','99조');
     const record = {id,createdAt:now,updatedAt:now,startAt:now,endAt:null,company:'브라우저 검증 회사',memo:'<img src=x onerror=alert(1)>',team:'검증 1조',visitType:'booth',cards:[]};
     await db.saveRecord(record);
     record.cards=[photo]; record.updatedAt=new Date(Date.parse(now)+1).toISOString();
@@ -144,6 +151,12 @@ try {
   const records = await evaluate('(async()=>{const db=await import("./storage.js");return await db.getRecords();})()');
   assert.equal(records.length, 1);
   assert.equal(records[0].cards.length, 1);
+  assert.equal(records[0].team,'검증 1조','Existing team metadata must remain unchanged internally');
+  assert.equal(await evaluate('/검증 1조|99조|조 미지정|기록 조/.test(document.body.innerText)'),false,'Legacy team metadata must not appear anywhere in the UI');
+  await evaluate('document.querySelector("#search").value="검증 1조";document.querySelector("#search").dispatchEvent(new Event("input",{bubbles:true}))');
+  assert.equal(await evaluate('document.querySelectorAll(".record-item").length'),0,'Hidden legacy team values must not affect company/memo search');
+  await evaluate('document.querySelector("#search").value="";document.querySelector("#search").dispatchEvent(new Event("input",{bubbles:true}))');
+  assert.equal(await evaluate('document.querySelectorAll(".record-item").length'),1,'Records with old team metadata must remain listed');
   await eventually('!document.querySelector("#new-record").disabled');
   await evaluate('document.querySelector("#new-record").click()');
   await eventually('!document.querySelector("#start-panel").hidden && !document.querySelector("#start-record").disabled');
@@ -155,6 +168,8 @@ try {
     }
   })()`);
   await eventually('(async()=>{const db=await import("./storage.js");return (await db.getRecords()).some(r=>r.company==="실제 버튼 상담" && r.memo.includes("현장 시연 요청"));})()');
+  assert.equal(await evaluate('(async()=>{const db=await import("./storage.js");return (await db.getRecords()).find(r=>r.company==="실제 버튼 상담").team;})()'),'','New consultations must ignore any old saved team preference');
+  assert.ok(await evaluate('document.querySelector("#overlap-warning").textContent.includes("브라우저 검증 회사")'),'A new consultation must see overlapping legacy records regardless of old team labels');
   const pngPath=join(scratch,'test-card.png');
   await writeFile(pngPath,Buffer.from(fixture.png,'base64'));
   const dom=await send('DOM.getDocument');
@@ -219,6 +234,8 @@ try {
   assert.ok(zipPath,'UI did not download a ZIP');
   const exported=await readBundle(new Blob([await readFile(zipPath)]));
   assert.equal(exported.records.length,3);assert.equal(exported.cards.length,2);
+  assert.equal(exported.records.find(record=>record.id===fixture.id).team,'검증 1조','Export must preserve existing legacy metadata without showing it in the UI');
+  assert.ok(exported.records.filter(record=>record.id!==fixture.id).every(record=>record.team===''),'All new consultation ZIP records must use empty team metadata');
   assert.equal(exported.records.find(r=>r.company==='실제 버튼 상담').endAt,null,'An unfinished consultation must be included in the ZIP');
   assert.equal(await evaluate('(async()=>{const db=await import("./storage.js");return (await db.getCards()).length;})()'),2,'Export must retain the photos in device storage');
   const importInput=await send('DOM.querySelector',{nodeId:dom.root.nodeId,selector:'#import-file'});

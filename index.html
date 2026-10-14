@@ -30,7 +30,7 @@
       </section>
       <section class="editor-panel" aria-labelledby="editor-heading">
         <div class="editor-top"><h2 id="editor-heading">새 상담</h2><span id="save-status" class="save-status">준비 중</span></div>
-        <div class="record-context"><label>기록 조<input id="team" type="text" maxlength="40" value="1조" autocomplete="off" aria-label="기록 조"></label><label>상담 구분<select id="visit-type"><option value="booth">우리 부스 상담</option><option value="visit">다른 부스 방문</option></select></label></div>
+        <div class="record-context"><label>상담 구분<select id="visit-type"><option value="booth">우리 부스 상담</option><option value="visit">다른 부스 방문</option></select></label></div>
         <div id="start-panel" class="start-panel"><h3>대화가 시작될 때 시각을 기록하세요.</h3><p>전체 녹음은 상담 시작·종료 시각으로 구간을 연결합니다.<br>개별 녹음은 나중에 분석 PC에서 해당 상담에 연결합니다.</p><p>이 버튼은 상담 시각만 기록합니다. 녹음은 별도로 진행하고, 기기 시계를 녹음기와 먼저 맞춰주세요.</p><button id="start-record" class="button button-primary wide" type="button" disabled>상담 시작 · 시간 기록</button></div>
         <form id="record-form" hidden>
           <div id="session-banner" class="session-banner"><span><span class="status-dot"></span><strong id="session-state">상담 진행 중</strong></span><strong id="duration">00:00</strong></div>
@@ -47,7 +47,7 @@
           <div class="record-delete-actions"><button id="delete-record" class="text-button" type="button" disabled>이 상담 삭제</button></div>
         </form>
       </section>
-      <section class="transfer-panel" aria-labelledby="transfer-heading"><h2 id="transfer-heading">기록 내보내기</h2><p id="export-summary">상담 내용과 명함·명찰 사진을 함께 담습니다.</p><p>검색과 관계없이 선택한 날짜의 모든 기록을 포함합니다. 진행 중인 상담도 종료 시각 없이 포함되며, 분석 PC에서 시각 확인 후 분석할 수 있습니다.</p><button id="export-date" class="button button-primary wide" type="button" disabled>선택 날짜 ZIP 다운로드</button><div class="secondary-actions"><button id="export-all" class="text-button" type="button" disabled>모든 날짜 ZIP 백업</button><label id="import-label" class="text-button import-label" for="import-file" role="button" tabindex="0">기록 ZIP 가져오기<input id="import-file" type="file" accept=".zip,application/zip" hidden disabled></label></div><p class="transfer-footnote">같은 팀이라도 각 기기에서 따로 내보내세요. 다운로드 후에도 기록과 사진은 기기에 남습니다. 파일이 저장된 것을 확인한 뒤 분석 PC의 ‘현장 기록 가져오기’에서 여세요.</p></section>
+      <section class="transfer-panel" aria-labelledby="transfer-heading"><h2 id="transfer-heading">기록 내보내기</h2><p id="export-summary">상담 내용과 명함·명찰 사진을 함께 담습니다.</p><p>검색과 관계없이 선택한 날짜의 모든 기록을 포함합니다. 진행 중인 상담도 종료 시각 없이 포함되며, 분석 PC에서 시각 확인 후 분석할 수 있습니다.</p><button id="export-date" class="button button-primary wide" type="button" disabled>선택 날짜 ZIP 다운로드</button><div class="secondary-actions"><button id="export-all" class="text-button" type="button" disabled>모든 날짜 ZIP 백업</button><label id="import-label" class="text-button import-label" for="import-file" role="button" tabindex="0">기록 ZIP 가져오기<input id="import-file" type="file" accept=".zip,application/zip" hidden disabled></label></div><p class="transfer-footnote">각 기기에서 따로 내보내세요. 다운로드 후에도 기록과 사진은 기기에 남습니다. 파일이 저장된 것을 확인한 뒤 분석 PC의 ‘현장 기록 가져오기’에서 여세요.</p></section>
     </div>
     <footer><span>TiSC · 현장 상담 기록</span><p>쿠키·사이트 데이터를 지우면 기록도 삭제됩니다. 모든 날짜 ZIP 백업을 별도로 보관하세요.</p></footer>
   </main>

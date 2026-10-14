@@ -58,7 +58,7 @@ export function validateRecord(record) {
   return {
     id: uuid(record.id), createdAt: timestamp(record.createdAt), updatedAt: timestamp(record.updatedAt),
     startAt, endAt, company: text(record.company, 200, '회사명').trim(),
-    memo: text(record.memo, 5000, '메모'), team: text(record.team, 40, '조 이름').trim(),
+    memo: text(record.memo, 5000, '메모'), team: text(record.team === undefined ? '' : record.team, 40, '기록 구분').trim(),
     visitType: record.visitType, cards,
   };
 }

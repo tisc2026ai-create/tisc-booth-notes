@@ -79,8 +79,8 @@ main{max-width:1280px;margin:auto;padding:28px 32px 0}
 .transfer-panel .transfer-footnote{margin-bottom:0;font-size:12px}
 .save-status{flex-shrink:0;font-size:12px;color:var(--muted)}
 .save-status.error{color:var(--ink);font-weight:700}
-.record-context{display:grid;grid-template-columns:1fr 1.6fr;gap:12px;margin-bottom:24px}
-.record-context label{color:var(--muted);font-size:13px}
+.record-context{margin-bottom:24px}
+.record-context label{display:block;color:var(--muted);font-size:13px}
 .record-context input,.record-context select{margin-top:6px}
 .start-panel{padding:22px 0}
 .start-panel p{margin:0 0 20px;color:var(--muted);font-size:14px;line-height:1.9}
@@ -133,7 +133,7 @@ dialog::backdrop{background:#0009}
 dialog img{display:block;max-width:100%;max-height:75vh;object-fit:contain}
 #delete-dialog{width:calc(100vw - 40px);max-width:480px}#delete-dialog p{font-size:13px;margin:16px 0;overflow-wrap:anywhere}.delete-dialog-actions{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:10px;margin-top:24px}
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}
-@media(max-width:900px){.header-right{flex-direction:column;align-items:flex-end;gap:4px}.offline-status{white-space:normal}.workspace{gap:32px}.record-context{grid-template-columns:1fr 1fr}.list-tools{flex-wrap:wrap}.date-wrap{width:100%}}
+@media(max-width:900px){.header-right{flex-direction:column;align-items:flex-end;gap:4px}.offline-status{white-space:normal}.workspace{gap:32px}.list-tools{flex-wrap:wrap}.date-wrap{width:100%}}
 @media(max-width:640px){
  body{font-size:16px}
  .site-header{min-height:76px;padding:18px 20px;gap:12px}
@@ -155,7 +155,6 @@ dialog img{display:block;max-width:100%;max-height:75vh;object-fit:contain}
  .record-time{font-size:12px}.record-memo{font-size:13px}
  .list-caption{font-size:11px}.active-count{margin-left:2px}
  .text-button{min-height:48px}.save-status{font-size:11px}
- .record-context{gap:12px;margin-bottom:24px}.record-context label{font-size:13px}
  .start-panel{padding:12px 0}.start-panel h3{font-size:18px}.start-panel p{font-size:14px}
  .session-banner strong{font-size:14px}.session-banner>#duration{font-size:24px}
  .time-summary{gap:4px 12px}.time-summary span{font-size:12px}
