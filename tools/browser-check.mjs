@@ -87,7 +87,7 @@ try {
     await send('Page.reload');
     await eventually(`performance.timeOrigin!==${previous} && Boolean(document.querySelector('#new-record')) && !document.querySelector('#new-record').disabled`);
   }
-  await eventually('document.readyState === "complete"');
+  await eventually(`location.origin === ${JSON.stringify(new URL(url).origin)} && document.readyState === "complete"`);
   const upgradedId=await evaluate(`(async()=>{
     const id=crypto.randomUUID(),photoId=crypto.randomUUID(),stamp=new Date().toISOString(),bytes=Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6U3sAAAAASUVORK5CYII='),char=>char.charCodeAt(0));
     const photo={id:photoId,name:'이전 사진.png',type:'image/png',size:bytes.length,path:'cards/'+photoId+'.png'};
